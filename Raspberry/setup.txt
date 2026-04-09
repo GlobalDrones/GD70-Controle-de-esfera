@@ -1,0 +1,7 @@
+sudo ip addr add 192.168.144.100 dev eth0;
+sudo ip link set eth0 up;
+sudo arp-scan --localnet;
+
+se não funcionar:
+sudo nmtui
+mudar a conexão de 192.168.../32 pra /24
