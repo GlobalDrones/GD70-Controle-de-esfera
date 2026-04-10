@@ -4,20 +4,42 @@ import os
 import sys
 import time
 import threading
-from gpiozero import PWMOutputDevice
-from gpiozero import Device
-from gpiozero.pins.lgpio import LGPIOFactory
+from collections import deque  
+import serial 
 
 # ===========================================================================
-# CONFIGURACOES DE PWM
+# CONFIGURACOES DE UART (SERIAL) - BUSCA AUTOMATICA
 # ===========================================================================
-pwm = PWMOutputDevice(18,frequency=490)
-Device.pin_factory = LGPIOFactory()
-def send_ang_pwm(angulo):
-    angulo = max(0,min(90,angulo))
-    duty = angulo/90
-    print(duty)
-    pwm.value = duty
+BAUDRATE = 115200
+# Lista de portas que o Linux costuma dar para o Arduino
+PORTAS_TENTATIVA = [
+    '/dev/ttyUSB0', '/dev/ttyUSB1', '/dev/ttyUSB2', 
+    '/dev/ttyACM0', '/dev/ttyACM1'
+]
+
+arduino = None
+
+print("[INFO] Procurando Arduino nas portas USB...")
+for porta in PORTAS_TENTATIVA:
+    try:
+        arduino = serial.Serial(porta, BAUDRATE, timeout=0)
+        print(f"[OK] Sucesso! Conectado ao Arduino na porta: {porta}")
+        break  # Se conectou, sai do loop de busca
+    except Exception as e:
+        pass # Ignora o erro e tenta a proxima porta da lista
+
+if arduino is None:
+    print("[AVISO] Arduino nao encontrado. O codigo vai rodar, mas sem enviar os dados.")
+
+def send_ang_serial(angulo):
+    if arduino is not None and arduino.is_open:
+        angulo = max(0, min(90, angulo))
+        msg = f"{angulo:.1f}\n"
+        try:
+            arduino.write(msg.encode('utf-8'))
+        except Exception as e:
+            pass # Previne que o script quebre se o cabo soltar no meio do uso
+
 # ===========================================================================
 # CONFIGURACOES DE IMAGEM E REDE
 # ===========================================================================
@@ -105,7 +127,6 @@ class AsyncCamera:
         print(f"[OK] {self.name} conectada em background")
         return True
 
-
     def _loop(self):
         while self.running:
             if self._cap is not None and self._cap.isOpened():
@@ -157,13 +178,10 @@ def build_rectification(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, img_size):
 
 def detectar_angulo(rect_l, cx, cy, roi_radius):
         gray = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
-
-        # máscara circular
         mask = np.zeros_like(gray)
         cv2.circle(mask, (cx, cy), roi_radius, 255, -1)
 
         roi = cv2.bitwise_and(gray, gray, mask=mask)
-
         edges = cv2.Canny(roi, 50, 150)
 
         lines = cv2.HoughLinesP(edges,
@@ -181,8 +199,6 @@ def detectar_angulo(rect_l, cx, cy, roi_radius):
 
         for l in lines:
             x1, y1, x2, y2 = l[0]
-
-            # garante que está dentro da ROI
             if ((x1 - cx)**2 + (y1 - cy)**2 > roi_radius**2 and
                 (x2 - cx)**2 + (y2 - cy)**2 > roi_radius**2):
                 continue
@@ -197,10 +213,8 @@ def detectar_angulo(rect_l, cx, cy, roi_radius):
             return None, None
 
         x1, y1, x2, y2 = best_line
-
         angle = np.degrees(np.arctan2(x2 - x1, y2 - y1))
 
-        # normalizar (opcional)
         if angle < 0:
             angle = 90 + abs(angle)
 
@@ -212,7 +226,6 @@ def detectar_angulo(rect_l, cx, cy, roi_radius):
 # ===========================================================================
 
 SCALES       = {ord('1'): 1.00, ord('2'): 0.75, ord('3'): 0.50, ord('4'): 0.25}
-SCALE_LABELS = {ord('1'): "100%", ord('2'): "75%", ord('3'): "50%", ord('4'): "25%"}
 
 class ScaleManager:
     def __init__(self, cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, base_w, base_h):
@@ -310,42 +323,19 @@ class SGBMParams:
 
 
 # ===========================================================================
-# HUD E VISUALIZACAO
+# HUD E VISUALIZACAO (SIMPLIFICADO)
 # ===========================================================================
 
-def draw_hud(frame, sgbm, fps, scale_label, show_epi, view_mode, use_wls, stats_str, stats_color):
+def draw_mini_hud(frame, fps, stats_str, stats_color):
     h, w = frame.shape[:2]
-    overlay = frame.copy()
-    cv2.rectangle(overlay, (0, 0), (min(w, 540), 245), (0, 0, 0), -1)
-    cv2.addWeighted(overlay, 0.45, frame, 0.55, 0, frame)
+    # Retangulo escuro no topo para dar contraste nos textos
+    cv2.rectangle(frame, (0, 0), (min(w, 800), 65), (0, 0, 0), -1)
     
-    view_str = ["L + MAPA DE PROFUNDIDADE", "ORIGINAL (L / R)", "RETIFICADAS (L / R)"][view_mode]
-    wls_str  = "LIGADO (Lento)" if use_wls else "DESLIGADO (Rapido)"
-    
-    lines = [
-        f"FPS: {fps:.1f}  |  Visao (V): {view_str}",
-        stats_str,
-        f"Escala: {scale_label}  (1/2/3/4)",
-        f"numDisparities (+/-): {sgbm.num_disp} (Menos = Mais FPS)",
-        f"minDisparity (A/S): {sgbm.min_disp}",
-        f"blockSize (B para ciclar): {sgbm.block}",
-        f"Filtro WLS (W): {wls_str}",
-        f"Epipolares: {'ON' if show_epi else 'OFF'}  (E)   D=cinza",
-        "P=salvar  R=reset  Q=sair",
-    ]
-    for i, l in enumerate(lines):
-        color = (0, 255, 200) if i == 0 else (0, 100, 255)
-        if i == 1: color = stats_color # Cor dinamica da Nuvem (Amarelo ou Verde)
-        if "WLS" in l: color = (0, 255, 0) if not use_wls else (0, 0, 255)
-        cv2.putText(frame, l, (8, 22 + i * 23),
-                    cv2.FONT_HERSHEY_SIMPLEX, 0.55, color, 1)
-
-def draw_epilines(left, right, step=40):
-    out = np.hstack([left, right])
-    for y in range(step, left.shape[0], step):
-        c = [int(x) for x in np.random.randint(80, 220, 3)]
-        cv2.line(out, (0, y), (out.shape[1], y), c, 1)
-    return out
+    cv2.putText(frame, f"FPS: {fps:.1f}", (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 200), 1)
+                
+    cv2.putText(frame, stats_str, (10, 50),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.6, stats_color, 2)
 
 
 # ===========================================================================
@@ -379,16 +369,16 @@ def main():
 
     print("[OK] Loop de tempo real iniciado!")
 
-    show_epi  = False
     gray_disp = False
     use_wls   = False   
     scale_key = ord('3')  
     scale_mgr.set(SCALES[scale_key])
-    view_mode = 0
+    
     fps       = 0.0
     t_last    = time.time()
+    historico_angulos = deque(maxlen=30)
     
-    cv2.namedWindow("Stereo Realtime", cv2.WINDOW_NORMAL)
+    cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
 
     while True:
         f0 = cam0.read()
@@ -410,137 +400,117 @@ def main():
         rect_l = cv2.remap(f0, map1x, map1y, cv2.INTER_LINEAR)
         rect_r = cv2.remap(f1, map2x, map2y, cv2.INTER_LINEAR)
 
-        display = None
-        
-        # Textos padroes do HUD
         stats_str = "NUVEM CENTRAL -> Sem dados validos na area"
         stats_color = (255, 255, 0) # Amarelo
 
-        if view_mode == 1:
-            display = np.hstack([f0, f1])
-        elif view_mode == 2:
-            if show_epi:
-                display = draw_epilines(rect_l, rect_r)
-            else:
-                display = np.hstack([rect_l, rect_r])
+        gl = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
+        gr = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
+        dl = left_m.compute(gl, gr)
+        
+        if use_wls:
+            dr   = right_m.compute(gr, gl)
+            disp = wls.filter(dl, rect_l, None, dr).astype(np.float32) / 16.0
         else:
-            gl = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
-            gr = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
-            dl = left_m.compute(gl, gr)
+            disp = dl.astype(np.float32) / 16.0
+        
+        mask = (disp > sgbm.min_disp)
+
+        valid_disp = disp[mask]
+        if len(valid_disp) > 0:
+            min_d_clip = np.percentile(valid_disp, 2)
+            max_d_clip = np.percentile(valid_disp, 98)
+            disp_clipped = np.clip(disp, min_d_clip, max_d_clip)
+        else:
+            disp_clipped = disp
+
+        disp_norm = cv2.normalize(disp_clipped, None, 0, 255, cv2.NORM_MINMAX)
+        
+        if gray_disp:
+            disp_vis = cv2.cvtColor(np.uint8(disp_norm), cv2.COLOR_GRAY2BGR)
+        else:
+            disp_vis = cv2.applyColorMap(np.uint8(disp_norm), cv2.COLORMAP_JET)
+        
+        disp_vis[~mask] = 0
+
+        # --- LOGICA DA NUVEM DE PONTOS E ANGULO ---
+        cx, cy = out_size[0] // 2, out_size[1] // 2
+        roi_radius = int(80 * SCALES[scale_key])
+
+        angulo, linha = detectar_angulo(rect_l, cx, cy, roi_radius)
+
+        if angulo is not None:
+            if angulo > 90:
+                angulo = 180 - angulo
             
-            if use_wls:
-                dr   = right_m.compute(gr, gl)
-                disp = wls.filter(dl, rect_l, None, dr).astype(np.float32) / 16.0
-            else:
-                disp = dl.astype(np.float32) / 16.0
+            historico_angulos.append(angulo)
+            media_angulo = int(sum(historico_angulos) / len(historico_angulos))
             
-            mask = (disp > sgbm.min_disp)
+            stats_str += f" | Angulo: {angulo:.1f} deg | Med(30): {media_angulo:.1f} deg"
 
-            valid_disp = disp[mask]
-            if len(valid_disp) > 0:
-                min_d_clip = np.percentile(valid_disp, 2)
-                max_d_clip = np.percentile(valid_disp, 98)
-                disp_clipped = np.clip(disp, min_d_clip, max_d_clip)
-            else:
-                disp_clipped = disp
-
-            disp_norm = cv2.normalize(disp_clipped, None, 0, 255, cv2.NORM_MINMAX)
+            x1, y1, x2, y2 = linha
+            cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 255), 3)
             
-            if gray_disp:
-                disp_vis = cv2.cvtColor(np.uint8(disp_norm), cv2.COLOR_GRAY2BGR)
-            else:
-                disp_vis = cv2.applyColorMap(np.uint8(disp_norm), cv2.COLORMAP_JET)
+            send_ang_serial(media_angulo)
+
+        # Desenha o circulo delimitador
+        cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
+
+        Y, X = np.ogrid[:out_size[1], :out_size[0]]
+        dist_from_center = (X - cx)**2 + (Y - cy)**2 <= roi_radius**2
+        
+        valid_roi_mask = mask & dist_from_center & (disp > 0)
+        roi_disps = disp[valid_roi_mask]
+        
+        if len(roi_disps) > 0:
+            roi_depths = (focal * baseline) / roi_disps
             
-            disp_vis[~mask] = 0
-
-            # --- LOGICA DA NUVEM DE PONTOS (ROI) MODIFICADA COM REGRA DOS 3 METROS ---
-            cx, cy = out_size[0] // 2, out_size[1] // 2
-            roi_radius = int(80 * SCALES[scale_key])
-    
-            angulo, linha = detectar_angulo(rect_l, cx, cy, roi_radius)
-
-            if angulo is not None:
-                if angulo > 90:
-                    angulo = 180 - angulo
-                stats_str += f" | Angulo: {angulo:.1f} deg"
-
-                x1, y1, x2, y2 = linha
-                cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 255), 3)
-                send_ang_pwm(angulo)
-                print("ANGULO:", angulo)
-
-            # Desenha o circulo delimitador
-            cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
-
-            Y, X = np.ogrid[:out_size[1], :out_size[0]]
-            dist_from_center = (X - cx)**2 + (Y - cy)**2 <= roi_radius**2
+            p5 = np.percentile(roi_depths, 10)
+            p95 = np.percentile(roi_depths, 90)
+            filtered_depths = roi_depths[(roi_depths >= p5) & (roi_depths <= p95)]
             
-            valid_roi_mask = mask & dist_from_center & (disp > 0)
-            roi_disps = disp[valid_roi_mask]
-            
-            if len(roi_disps) > 0:
-                roi_depths = (focal * baseline) / roi_disps
+            if len(filtered_depths) > 0:
+                d_min = np.min(filtered_depths)
+                d_max = np.max(filtered_depths)
+                d_mean = np.mean(filtered_depths)
                 
-                p5 = np.percentile(roi_depths, 10)
-                p95 = np.percentile(roi_depths, 90)
-                filtered_depths = roi_depths[(roi_depths >= p5) & (roi_depths <= p95)]
-                
-                if len(filtered_depths) > 0:
-                    d_min = np.min(filtered_depths)
-                    d_max = np.max(filtered_depths)
-                    d_mean = np.mean(filtered_depths)
-                    
-                    # A REGRA DOS 3 METROS SOLICITADA
-                    if (d_max - d_min) >= 1.5:
-                        if(not angulo):
-                            stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m"
-                        else:
-                            stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m | ANG: {angulo:.2f}°"
-                        #print("d_min: ",d_min)
-                        stats_color = (0, 255, 0) # Verde vibrante
+                if (d_max - d_min) >= 1.5:
+                    if(not angulo):
+                        stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m"
                     else:
-                        stats_str = f"NUVEM CENTRAL -> Media: {d_mean:.2f}m | Min: {d_min:.2f}m | Max: {d_max:.2f}m"
-                        stats_color = (255, 255, 0) # Amarelo padrao
+                        stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m | ANG MED: {media_angulo:.1f}°"
+                    stats_color = (0, 255, 0) # Verde vibrante
+                else:
+                    stats_str = f"NUVEM CENTRAL -> Media: {d_mean:.2f}m | Min: {d_min:.2f}m | Max: {d_max:.2f}m"
+                    stats_color = (255, 255, 0) # Amarelo padrao
 
-            # Desenha a grade pontual numerica (pequenos pontos verdes com as distancias flutuando)
-            step = int(35 * SCALES[scale_key])
-            for dy in range(-roi_radius + 15, roi_radius, step):
-                for dx in range(-roi_radius + 15, roi_radius, step):
-                    if dx**2 + dy**2 <= (roi_radius - 10)**2:
-                        px, py = cx + dx, cy + dy
-                        if mask[py, px] and disp[py, px] > 0:
-                            d = (focal * baseline) / disp[py, px]
-                            cv2.circle(disp_vis, (px, py), 2, (0, 255, 0), -1)
-                            cv2.putText(disp_vis, f"{d:.1f}", (px + 4, py - 4),
-                                        cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
+        # Desenha a grade pontual numerica
+        step = int(35 * SCALES[scale_key])
+        for dy in range(-roi_radius + 15, roi_radius, step):
+            for dx in range(-roi_radius + 15, roi_radius, step):
+                if dx**2 + dy**2 <= (roi_radius - 10)**2:
+                    px, py = cx + dx, cy + dy
+                    if mask[py, px] and disp[py, px] > 0:
+                        d = (focal * baseline) / disp[py, px]
+                        cv2.circle(disp_vis, (px, py), 2, (0, 255, 0), -1)
+                        cv2.putText(disp_vis, f"{d:.1f}", (px + 4, py - 4),
+                                    cv2.FONT_HERSHEY_SIMPLEX, 0.4, (255, 255, 255), 1)
 
-            # Montagem da tela final
-            if show_epi:
-                epi = draw_epilines(rect_l, rect_r)
-                epi = cv2.resize(epi, (out_size[0], out_size[1] // 2))
-                bot = cv2.resize(disp_vis, (out_size[0], out_size[1] // 2))
-                display = np.vstack([epi, bot])
-            else:
-                lh = cv2.resize(rect_l,  (out_size[0] // 2, out_size[1] // 2))
-                dh = cv2.resize(disp_vis,(out_size[0] // 2, out_size[1] // 2))
-                display = np.hstack([lh, dh])
+        # Montagem da tela final (Apenas o Mapa de Profundidade)
+        display = disp_vis
 
         now    = time.time()
         fps    = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
         t_last = now
 
-        draw_hud(display, sgbm, fps, SCALE_LABELS.get(scale_key, "?"), show_epi, view_mode, use_wls, stats_str, stats_color)
-        cv2.imshow("Stereo Realtime", display)
+        draw_mini_hud(display, fps, stats_str, stats_color)
+        cv2.imshow("Stereo Profundidade", display)
 
+        # Manti os atalhos essenciais apenas para ajuste fino caso vc precise
         k = cv2.waitKey(1) & 0xFF
         if k in [ord('q'), 27]:
             break
-        elif k == ord('v'): 
-            view_mode = (view_mode + 1) % 3
         elif k == ord('w'): 
             use_wls = not use_wls
-        elif k == ord('e'):
-            show_epi = not show_epi
         elif k == ord('d'):
             gray_disp = not gray_disp
         elif k in SCALES:
@@ -558,13 +528,11 @@ def main():
             sgbm.cycle_block(); left_m, right_m, wls = sgbm.build()
         elif k == ord('r'):
             sgbm.reset(); left_m, right_m, wls = sgbm.build()
-        elif k == ord('p'):
-            ts = int(time.time())
-            cv2.imwrite(f"saved_realtime_{ts}.png", display)
-            print(f"[OK] Print salvo como saved_realtime_{ts}.png")
 
     cam0.stop()
     cam1.stop()
+    if arduino is not None:
+        arduino.close() # Libera a porta USB no final
     cv2.destroyAllWindows()
     print("[OK] Encerrado graciosamente")
 
