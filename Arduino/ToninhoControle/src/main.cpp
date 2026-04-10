@@ -12,6 +12,8 @@
 
 #define LED_PIN 12 
 
+// O ENCODER_PIN (9) não será mais usado para o ângulo, 
+// pois agora virá via TX/RX (Serial), mas mantivemos a definição caso precise depois.
 #define ENCODER_PIN 9 
 #define INTENSITY_PIN 10 
 
@@ -177,6 +179,9 @@ void setup() {
   init_mpu(); 
   
   Serial.begin(115200); 
+  // IMPORTANTE: Define um limite de tempo muito curto (5ms) para a leitura da Serial.
+  // Isso impede que a função readStringUntil trave o seu cálculo de PID.
+  Serial.setTimeout(5);
   
   calibrate_gyro(); // Agora possui o pisca-pisca de aviso integrado
   yaw_gyro = 0; 
@@ -199,14 +204,20 @@ void loop() {
     last_time = now;
     if(dt > 0.5) dt=0.01;
 
-    // -------- PWM -------- 
-    int pwm_angulo = pulseIn(ENCODER_PIN, HIGH, 25000); 
-    int pwm_intensidade = pulseIn(INTENSITY_PIN, HIGH, 25000); 
-
-    if (pwm_angulo > 900 && pwm_angulo < 2100) { 
-        desired_yaw = map(pwm_angulo, 1000, 2000, 0, 359); 
+    // -------- UART (Lendo da Rasp) -------- 
+    // Se chegou algum dado na porta Serial
+    if (Serial.available() > 0) {
+        // Lê a String até a quebra de linha enviada pela Rasp (\n)
+        String input = Serial.readStringUntil('\n');
+        
+        // Converte a string para float e atualiza o alvo
+        if (input.length() > 0) {
+            desired_yaw = input.toFloat();
+        }
     }
 
+    // -------- PWM INTENSIDADE -------- 
+    int pwm_intensidade = pulseIn(INTENSITY_PIN, HIGH, 25000); 
     if (pwm_intensidade > 900 && pwm_intensidade < 2100) { 
         int map_int = map(pwm_intensidade, 1000, 2000, 0, 100); 
         intensidade_mult = constrain(map_int, 0, 100) / 100.0; 
@@ -222,7 +233,7 @@ void loop() {
 
     float Kp = 4.7*0.8;  
     float Ki = 2.0*1.3;  
-    float Kd = 6.0*0.6;  
+    float Kd = 6.0*0.7;  
 
     float P = pos_error * Kp;
 
@@ -298,7 +309,8 @@ void loop() {
       } while (u8g.nextPage());
     }
 
-    // Serial mantido para debug, mas pode comentar no futuro para poupar ainda mais CPU
+    // Deixei o Serial.print de debug aqui. A RPi vai receber esse texto de volta, 
+    // mas o código em Python que vamos fazer para ela vai ignorar isso perfeitamente.
     Serial.print("Alvo:");
     Serial.print(desired_yaw);
     Serial.print("\t Gyro:");
@@ -308,3 +320,5 @@ void loop() {
     Serial.print("\t Out:");
     Serial.println(yaw_output); 
 }
+
+ 
