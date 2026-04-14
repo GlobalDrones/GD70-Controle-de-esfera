@@ -1,5 +1,5 @@
 
-# GD70 - Controle de Esfera 🎾
+# GD70 - Controle de Esfera
 
 ![Status](https://img.shields.io/badge/Status-Em%20Desenvolvimento-yellow)
 ![Tech](https://img.shields.io/badge/Hardware-Arduino%20%2F%20ESP32-blue)
