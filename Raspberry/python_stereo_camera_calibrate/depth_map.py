@@ -7,6 +7,7 @@ import threading
 from collections import deque  
 import serial 
 
+
 # ===========================================================================
 # CONFIGURACOES DE UART (SERIAL) - BUSCA AUTOMATICA
 # ===========================================================================
@@ -44,7 +45,7 @@ def send_ang_serial(angulo):
 # CONFIGURACOES DE IMAGEM E REDE
 # ===========================================================================
 
-CAM0_ID    = "rtsp://192.168.144.26:8554/main.264"  # camera esquerda
+CAM0_ID    = "rtsp://192.168.144.25:8554/main.264"  # camera esquerda
 CAM1_ID    = "rtsp://192.168.144.2:8554/main.264"   # camera direita
 
 FRAME_W    = 1280
@@ -59,20 +60,20 @@ cv2.setNumThreads(4)
 
 def load_params():
     cmtx0 = np.array([
-        [668.78355047,   0.        , 656.74961609],
-        [  0.        , 667.73434135, 341.95018825],
-        [  0.        ,   0.        ,   1.        ]
+    [849.09475804 ,  0,         656.00357451],
+    [  0,         827.44435633, 407.89408896],
+    [  0,           0,           1        ]
     ], dtype=np.float64)
     
-    dist0 = np.array([[ 0.08551549, -0.08088693, 0., 0., 0. ]], dtype=np.float64)
+    dist0 = np.array([[ 0.29794075, -0.2598218, 0., 0., 0. ]], dtype=np.float64)
 
     cmtx1 = np.array([
-        [702.3551953 ,   0.        , 660.82123282],
-        [  0.        , 703.08238348, 330.96782801],
-        [  0.        ,   0.        ,   1.        ]
+    [810.15131758,   0,         669.59465007],
+    [  0,         783.52171627, 382.90946542],
+    [  0,           0,            1.        ]
     ], dtype=np.float64)
     
-    dist1 = np.array([[ 0.09119711, -0.10748202, 0., 0., 0. ]], dtype=np.float64)
+    dist1 = np.array([[ 0.28443683, -0.27500358, 0., 0., 0. ]], dtype=np.float64)
 
     R_rel = np.array([
         [ 0.99989951,  0.0131155 ,  0.00538065],
@@ -174,6 +175,7 @@ def build_rectification(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, img_size):
     focal    = float(P1[0, 0])
     baseline = abs(float(T_rel[0][0]))
     return map1x, map1y, map2x, map2y, Q, focal, baseline
+# Adicionei o parâmetro max_profundidade na assinatura da função
 
 
 def detectar_angulo(rect_l, cx, cy, roi_radius):
@@ -219,7 +221,6 @@ def detectar_angulo(rect_l, cx, cy, roi_radius):
             angle = 90 + abs(angle)
 
         return angle, best_line
-
 
 # ===========================================================================
 # SCALE MANAGER
@@ -376,7 +377,8 @@ def main():
     
     fps       = 0.0
     t_last    = time.time()
-    historico_angulos = deque(maxlen=30)
+    historico_angulos = deque(maxlen=10)
+    media_angulo = 0
     
     cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
 
@@ -436,8 +438,13 @@ def main():
         cx, cy = out_size[0] // 2, out_size[1] // 2
         roi_radius = int(80 * SCALES[scale_key])
 
+        # Defina o limite máximo que o drone consegue "enxergar" (ex: 3.0 metros)
+        LIMITE_MAXIMO_M = 1.2 
+        GAP_TESTE = 0.25 
+        
         angulo, linha = detectar_angulo(rect_l, cx, cy, roi_radius)
-
+	
+	
         if angulo is not None:
             if angulo > 90:
                 angulo = 180 - angulo
@@ -448,7 +455,7 @@ def main():
             stats_str += f" | Angulo: {angulo:.1f} deg | Med(30): {media_angulo:.1f} deg"
 
             x1, y1, x2, y2 = linha
-            cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 255), 3)
+            cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
             
             send_ang_serial(media_angulo)
 
@@ -472,16 +479,8 @@ def main():
                 d_min = np.min(filtered_depths)
                 d_max = np.max(filtered_depths)
                 d_mean = np.mean(filtered_depths)
-                
-                if (d_max - d_min) >= 1.5:
-                    if(not angulo):
-                        stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m"
-                    else:
-                        stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m | ANG MED: {media_angulo:.1f}°"
-                    stats_color = (0, 255, 0) # Verde vibrante
-                else:
-                    stats_str = f"NUVEM CENTRAL -> Media: {d_mean:.2f}m | Min: {d_min:.2f}m | Max: {d_max:.2f}m"
-                    stats_color = (255, 255, 0) # Amarelo padrao
+                stats_str = f"ALVO ISOLADO-> Distancia: {d_min:.2f}m | ANG MED: {media_angulo:.1f}°"
+                stats_color = (0, 255, 0) # Verde vibrante
 
         # Desenha a grade pontual numerica
         step = int(35 * SCALES[scale_key])
