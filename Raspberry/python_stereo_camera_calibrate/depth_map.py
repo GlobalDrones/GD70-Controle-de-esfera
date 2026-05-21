@@ -99,6 +99,16 @@ def send_ang_serial(angulo):
             arduino.write(msg.encode("utf-8"))
         except Exception as e:
             pass  
+            
+# Nova função para enviar comandos de texto
+def send_cmd_serial(cmd):
+    if arduino is not None and arduino.is_open:
+        msg = f"{cmd}\n"
+        try:
+            arduino.write(msg.encode("utf-8"))
+            print(f"[SERIAL] Comando enviado: {cmd}")
+        except Exception as e:
+            pass
 
 # Loop assíncrono que consome os dados enviados pelo cabo USB da Black Pill
 def thread_leitura_telemetria():
@@ -510,7 +520,7 @@ def main():
         
         hough_vis = rect_l.copy()
         cx, cy = out_size[0] // 2, out_size[1] // 2
-        roi_radius = int(80 * SCALES[scale_key])
+        roi_radius = int(160 * SCALES[scale_key])
         
         angulo, linha, dist_alvo, roi_bin = detectar_linha_mais_proxima(
             rect_l, disp, focal, baseline, cx, cy, roi_radius
@@ -581,6 +591,10 @@ def main():
             break
         elif k == ord("w"):
             use_wls = not use_wls
+        elif k == ord("z"):
+            send_cmd_serial("ligarmotor")
+        elif k == ord("x"):
+            send_cmd_serial("desligarmotor")
         elif k == ord("d"):
             gray_disp = not gray_disp
         elif k in SCALES:
