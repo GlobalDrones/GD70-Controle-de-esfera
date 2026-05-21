@@ -6,34 +6,90 @@ import time
 import threading
 from collections import deque
 import serial
+import subprocess
+from gpiozero import LED # Controle seguro do pino de reset na Raspberry Pi 5
 
 # ===========================================================================
-# CONFIGURACOES DE UART (SERIAL) - BUSCA AUTOMATICA
+# CONFIGURAÇÕES FÍSICAS E DE RESET DA STM32 (BLACK PILL)
+# ===========================================================================
+PINO_RESET_STM = 18  # GPIO 18 (Pino físico 12 da Raspberry Pi)
+
+# Dicionário de telemetria atualizado continuamente pela Thread em background
+telemetria_dados = {
+    "yaw": 0.0, "rate_z": 0.0, "pwm_bf": 1500, "pwm_as": 1500, "erro": 0.0, "pid_out": 0.0
+}
+
+def resetar_stm32():
+    print("[INFO] Enviando sinal de RESET físico para a STM32 (Black Pill)...")
+    try:
+        # Garante que o pino começa em HIGH (3.3V)
+        stm_reset = LED(PINO_RESET_STM, active_high=True, initial_value=True)
+        
+        # Puxa o pino R (NRST) para LOW (GND) por 100ms para forçar o reset
+        stm_reset.off()
+        time.sleep(0.1)
+        
+        # Solta o pino de volta para HIGH
+        stm_reset.on()
+        print("[OK] STM32 liberada! Aguardando estabilização do setup e calibração...")
+        stm_reset.close() 
+        time.sleep(1.5) # Tempo necessário para a calibração do MPU em bancada
+    except Exception as e:
+        print(f"[AVISO] Falha ao gerenciar pino GPIO de Reset: {e}")
+
+# ===========================================================================
+# FUNÇÃO DO STREAMER (FFMPEG COLETOR)
+# ===========================================================================
+def iniciar_streamer(width, height, scale):
+    largura_atual = int(width * scale)
+    altura_atual = int(height * scale)
+    # ATENÇÃO: Como o script faz hconcat de TRÊS telas, multiplicamos a largura por 3
+    largura_total_stream = largura_atual * 3
+    
+    command = [
+        'ffmpeg',
+        '-y',
+        '-f', 'rawvideo',
+        '-vcodec', 'rawvideo',
+        '-pix_fmt', 'bgr24',
+        '-s', f"{largura_total_stream}x{altura_atual}", 
+        '-r', '20', 
+        '-i', '-',
+        '-c:v', 'libx264', # Pode trocar por 'h264_v4l2m2m' se quiser usar aceleração via hardware
+        '-preset', 'ultrafast',
+        '-tune', 'zerolatency',
+        '-f', 'rtsp',
+        'rtsp://localhost:8554/linha'
+    ]
+    return subprocess.Popen(command, stdin=subprocess.PIPE)
+
+# ===========================================================================
+# CONFIGURACOES DE UART (SERIAL) - BUSCA AUTOMATICA E ASYNC THREAD
 # ===========================================================================
 BAUDRATE = 115200
-# Lista de portas que o Linux costuma dar para o Arduino
 PORTAS_TENTATIVA = [
-    "/dev/ttyUSB0",
-    "/dev/ttyUSB1",
-    "/dev/ttyUSB2",
-    "/dev/ttyACM0",
-    "/dev/ttyACM1",
+    "/dev/ttyUSB0", "/dev/ttyUSB1", "/dev/ttyUSB2",
+    "/dev/ttyACM0", "/dev/ttyACM1"
 ]
 
 arduino = None
-print("[INFO] Procurando Arduino nas portas USB...")
+
+# Executa o reset físico sincronizado de hardware ANTES de varrer as portas seriais
+resetar_stm32()
+
+print("[INFO] Procurando STM32 nas portas USB...")
 for porta in PORTAS_TENTATIVA:
     try:
-        arduino = serial.Serial(porta, BAUDRATE, timeout=0)
-        print(f"[OK] Sucesso! Conectado ao Arduino na porta: {porta}")
-        break  # Se conectou, sai do loop de busca
+        # Abrimos com timeout para evitar que chamadas de leitura congelem a execução
+        arduino = serial.Serial(porta, BAUDRATE, timeout=1)
+        arduino.flush()
+        print(f"[OK] Sucesso! Conectado à STM32 na porta: {porta}")
+        break  
     except Exception as e:
-        pass  # Ignora o erro e tenta a proxima porta da lista
-if arduino is None:
-    print(
-        "[AVISO] Arduino nao encontrado. O codigo vai rodar, mas sem enviar os dados."
-    )
+        pass  
 
+if arduino is None:
+    print("[AVISO] STM32 não encontrada. O código vai rodar, mas sem telemetria.")
 
 def send_ang_serial(angulo):
     if arduino is not None and arduino.is_open:
@@ -42,18 +98,46 @@ def send_ang_serial(angulo):
         try:
             arduino.write(msg.encode("utf-8"))
         except Exception as e:
-            pass  # Previne que o script quebre se o cabo soltar no meio do uso
+            pass  
 
+# Loop assíncrono que consome os dados enviados pelo cabo USB da Black Pill
+def thread_leitura_telemetria():
+    global telemetria_dados
+    if arduino is None:
+        return
+        
+    print("[OK] Thread paralela de leitura de telemetria rodando.")
+    while arduino.is_open:
+        try:
+            if arduino.in_waiting > 0:
+                linha = arduino.readline().decode('utf-8', errors='ignore').strip()
+                if not_linha := not linha:
+                    continue
+                
+                dados = linha.split(',')
+                if len(dados) == 6:
+                    telemetria_dados["yaw"]     = float(dados[0])
+                    telemetria_dados["rate_z"]  = float(dados[1])
+                    telemetria_dados["pwm_bf"]  = int(dados[2])
+                    telemetria_dados["pwm_as"]  = int(dados[3])
+                    telemetria_dados["erro"]    = float(dados[4])
+                    telemetria_dados["pid_out"] = float(dados[5])
+        except Exception as e:
+            time.sleep(0.1)
+        time.sleep(0.01)
+
+# Inicializa a Thread se houver conexão com o microcontrolador
+if arduino is not None:
+    threading.Thread(target=thread_leitura_telemetria, daemon=True).start()
 
 # ===========================================================================
 # CONFIGURACOES DE IMAGEM E REDE
 # ===========================================================================
 CAM0_ID = "rtsp://192.168.144.25:8554/main.264"  # camera esquerda
-CAM1_ID = "rtsp://192.168.144.2:8554/main.264"  # camera direita
+CAM1_ID = "rtsp://192.168.144.2:8554/main.264"   # camera direita
 FRAME_W = 1280
 FRAME_H = 720
 
-# Forca o OpenCV a usar todos os nucleos da Raspberry Pi
 cv2.setNumThreads(4)
 
 # ===========================================================================
@@ -89,8 +173,6 @@ def load_params():
 # ===========================================================================
 # CLASSE DE CAPTURA ASSINCRONA
 # ===========================================================================
-
-
 class AsyncCamera:
     def __init__(self, src, name, width, height):
         self.src = src
@@ -152,7 +234,6 @@ def scale_intrinsics(cmtx, scale):
     m[1, 2] *= scale
     return m
 
-
 def build_rectification(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, img_size):
     R1r, R2r, P1, P2, Q, _, _ = cv2.stereoRectify(
         cmtx0, dist0, cmtx1, dist1, img_size, R_rel, T_rel, alpha=0
@@ -171,25 +252,15 @@ def build_rectification(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, img_size):
 # ===========================================================================
 # DETECCAO DE LINHA POR PROFUNDIDADE
 # ===========================================================================
-
 def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radius):
-    # 1. Binarização Direta para Alvos Escuros
     gray = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
-    # Desfoque leve para remover ruído da câmera
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-    # A MÁGICA PARA A CORDA PRETA:
-    # 60 é o nível de tolerância de escuridão.
-    # cv2.THRESH_BINARY_INV inverte o resultado: o que for escuro vira linha branca para o Canny ler.
     _, bin_img = cv2.threshold(blurred, 60, 255, cv2.THRESH_BINARY_INV)
     mask = np.zeros_like(gray)
     cv2.circle(mask, (cx, cy), roi_radius, 255, -1)
-    # Aplica a máscara circular na imagem binarizada
     roi_bin = cv2.bitwise_and(bin_img, bin_img, mask=mask)
-    # Como a corda preta agora é uma linha branca sólida na tela preta,
-    # o Canny vai extrair as bordas com perfeição.
     edges = cv2.Canny(roi_bin, 50, 150)
 
-    # 2. HoughLinesP para pegar todas as retas possíveis
     lines = cv2.HoughLinesP(
         edges,
         1,
@@ -198,16 +269,13 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
         minLineLength=roi_radius // 3,
         maxLineGap=20,
     )
-    # Se não achar nada, retorna a imagem binarizada vazia também
     if lines is None:
         return None, None, None, roi_bin
     melhor_linha = None
     menor_distancia_media = float("inf")
 
-    # 3. Analisar cada linha no mapa de estereoscopia
     for l in lines:
         x1, y1, x2, y2 = l[0]
-        # Matemática para listar todos os (X,Y) que formam esta linha específica
         num_points = int(np.hypot(x2 - x1, y2 - y1))
         if num_points == 0:
             continue
@@ -215,16 +283,14 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
         y_coords = np.linspace(y1, y2, num_points).astype(int)
         profundidades_validas = []
         for px, py in zip(x_coords, y_coords):
-            # Trava de segurança para não tentar ler fora do mapa
             if py >= disp.shape[0] or px >= disp.shape[1] or py < 0 or px < 0:
                 continue
             d = disp[py, px]
-            if d > 0:  # Ignora buracos negros da estereoscopia
+            if d > 0:
                 Z = (focal * baseline) / d
                 if Z <= 3.0:
                     profundidades_validas.append(Z)
 
-        # 4. Só aceita a linha se pelo menos 30% dela teve dados tridimensionais válidos
         if len(profundidades_validas) > (num_points * 0.3):
             distancia_media = np.mean(profundidades_validas)
             if distancia_media < menor_distancia_media:
@@ -234,18 +300,15 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
     if melhor_linha is None:
         return None, None, None, roi_bin
 
-    # Calcula angulo da linha vencedora
     x1, y1, x2, y2 = melhor_linha
     angle = np.degrees(np.arctan2(x2 - x1, y2 - y1))
     if angle < 0:
         angle = 90 + abs(angle)
-    # Agora retornamos também o 'roi_bin' para o visualizador
     return angle, melhor_linha, menor_distancia_media, roi_bin
 
 # ===========================================================================
 # SCALE MANAGER
 # ===========================================================================
-
 SCALES = {ord("1"): 1.00, ord("2"): 0.75, ord("3"): 0.50, ord("4"): 0.25}
 class ScaleManager:
     def __init__(self, cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, base_w, base_h):
@@ -262,7 +325,7 @@ class ScaleManager:
         for s in SCALES.values():
             self._build(s)
         self.current = 1.0
-		
+        
     def _build(self, scale):
         if scale in self._cache:
             return
@@ -280,17 +343,14 @@ class ScaleManager:
 
     def set(self, scale):
         self.current = scale
-		
+        
     def get(self):
-
         return self._cache[self.current]
 
 
 # ===========================================================================
 # SGBM
 # ===========================================================================
-
-
 class SGBMParams:
     BLOCKS = [3, 5, 7, 9, 11]
 
@@ -346,31 +406,30 @@ class SGBMParams:
 
 
 # ===========================================================================
-# HUD E VISUALIZACAO
+# HUD E VISUALIZACAO (DUAS LINHAS: VISÃO + TELEMETRIA MOTORES)
 # ===========================================================================
-
-
 def draw_mini_hud(frame, fps, stats_str, stats_color):
     h, w = frame.shape[:2]
-    cv2.rectangle(frame, (0, 0), (min(w, 800), 65), (0, 0, 0), -1)
-    cv2.putText(
-        frame,
-        f"FPS: {fps:.1f}",
-        (10, 25),
-        cv2.FONT_HERSHEY_SIMPLEX,
-        0.6,
-        (0, 255, 200),
-        1,
-    )
-    cv2.putText(
-        frame, stats_str, (10, 50), cv2.FONT_HERSHEY_SIMPLEX, 0.6, stats_color, 2
-    )
+    # Retângulo estendido em altura (85px) para caber os dados da STM32 sem sobreposição
+    cv2.rectangle(frame, (0, 0), (min(w, 1100), 85), (0, 0, 0), -1)
+    
+    # Linha 1: Dados de Visão Estereoscópica e FPS
+    cv2.putText(frame, f"FPS: {fps:.1f} | {stats_str}", (10, 25),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 200), 1)
+                
+    # Linha 2: Telemetria da STM32 (Lida assincronamente da Thread paralela)
+    str_motores = (f"STM32 Real -> Yaw: {telemetria_dados['yaw']:+.1f}° | "
+                   f"GiroZ: {telemetria_dados['rate_z']:+.1f}°/s | "
+                   f"PWM_BF: {telemetria_dados['pwm_bf']}us | "
+                   f"PWM_AS: {telemetria_dados['pwm_as']}us | "
+                   f"Erro PID: {telemetria_dados['erro']:+.1f}°")
+                   
+    cv2.putText(frame, str_motores, (10, 55),
+                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 150, 50), 1)
 
 # ===========================================================================
 # MAIN
 # ===========================================================================
-
-
 def main():
     cmtx0, dist0, cmtx1, dist1, R_rel, T_rel = load_params()
     scale_mgr = ScaleManager(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, FRAME_W, FRAME_H)
@@ -379,6 +438,7 @@ def main():
     cam0 = AsyncCamera(CAM0_ID, "cam0-esq", FRAME_W, FRAME_H)
     cam1 = AsyncCamera(CAM1_ID, "cam1-dir", FRAME_W, FRAME_H)
     if not cam0.start() or not cam1.start():
+        if arduino is not None: arduino.close()
         sys.exit(1)
 
     print("[INFO] Aguardando o primeiro frame de ambas as cameras...")
@@ -391,7 +451,9 @@ def main():
         print("[ERRO] Timeout aguardando as cameras. Verifique o RTSP.")
         cam0.stop()
         cam1.stop()
+        if arduino is not None: arduino.close()
         sys.exit(1)
+        
     print("[OK] Loop de tempo real iniciado!")
     gray_disp = False
     use_wls = True
@@ -402,6 +464,10 @@ def main():
     historico_angulos = deque(maxlen=1)
     media_angulo = 0
     cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
+    
+    # Se quiser testar o streamer de vídeo via FFmpeg, descomente as duas linhas abaixo:
+    # streamer = iniciar_streamer(FRAME_W, FRAME_H, SCALES[scale_key])
+    
     while True:
         f0 = cam0.read()
         f1 = cam1.read()
@@ -418,7 +484,7 @@ def main():
         rect_l = cv2.remap(f0, map1x, map1y, cv2.INTER_LINEAR)
         rect_r = cv2.remap(f1, map2x, map2y, cv2.INTER_LINEAR)
         stats_str = "NUVEM CENTRAL -> Sem dados validos na area"
-        stats_color = (255, 255, 0)  # Amarelo
+        stats_color = (255, 255, 0)  
         gl = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
         gr = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
         dl = left_m.compute(gl, gr)
@@ -441,34 +507,36 @@ def main():
         else:
             disp_vis = cv2.applyColorMap(np.uint8(disp_norm), cv2.COLORMAP_JET)
         disp_vis[~mask] = 0
-        # Cópia para o visualizador da Câmera
+        
         hough_vis = rect_l.copy()
-        # --- LOGICA DA NUVEM DE PONTOS E ANGULO ---
         cx, cy = out_size[0] // 2, out_size[1] // 2
         roi_radius = int(80 * SCALES[scale_key])
-        # Recebe a imagem binarizada de volta da função
+        
         angulo, linha, dist_alvo, roi_bin = detectar_linha_mais_proxima(
             rect_l, disp, focal, baseline, cx, cy, roi_radius
         )
-        # Converte a binarização (que tem 1 canal) para 3 canais BGR para o hconcat funcionar
+        
         bin_vis = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
         if angulo is not None:
             if angulo > 90:
                 angulo = 180 - angulo
             historico_angulos.append(angulo)
             media_angulo = int(sum(historico_angulos) / len(historico_angulos))
-            stats_str = f"ALVO FIXADO -> Dist: {dist_alvo:.2f}m | Angulo: {angulo:.1f} deg | Med(10): {media_angulo:.1f} deg"
+            stats_str = f"ALVO FIXADO -> Dist: {dist_alvo:.2f}m | Angulo: {angulo:.1f} deg | Med: {media_angulo:.1f} deg"
             stats_color = (0, 255, 0)
             x1, y1, x2, y2 = linha
-            # Desenha a linha verde nas TRÊS telas
+            
             cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
             cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
             cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+            
+            # Envia o ângulo processado pela câmera via cabo USB para a Black Pill
             send_ang_serial(media_angulo)
-        # Desenha o circulo delimitador
+            
         cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
         cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
         cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
+        
         step = int(35 * SCALES[scale_key])
         for dy in range(-roi_radius + 15, roi_radius, step):
             for dx in range(-roi_radius + 15, roi_radius, step):
@@ -487,42 +555,27 @@ def main():
                             1,
                         )
 
-        # Etiquetas Inferiores
-        cv2.putText(
-            hough_vis,
-            "Cam Esquerda",
-            (10, out_size[1] - 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (0, 255, 255),
-            2,
-        )
-        cv2.putText(
-            bin_vis,
-            "Binarizacao",
-            (10, out_size[1] - 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
-        cv2.putText(
-            disp_vis,
-            "Profundidade",
-            (10, out_size[1] - 20),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.6,
-            (255, 255, 255),
-            2,
-        )
+        cv2.putText(hough_vis, "Cam Esquerda", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+        cv2.putText(bin_vis, "Binarizacao", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+        cv2.putText(disp_vis, "Profundidade", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-        # Montagem da tela final (Junta as TRÊS imagens lado a lado)
+        # Junta as três matrizes redimensionadas horizontalmente (Lado a Lado)
         display = cv2.hconcat([hough_vis, bin_vis, disp_vis])
+        
+        # Se usar o streamer do FFmpeg ativo, envie os bytes aqui:
+        # try:
+        #     streamer.stdin.write(display.tobytes())
+        # except Exception as e:
+        #     escala_atual = SCALES[scale_key]
+        #     streamer = iniciar_streamer(FRAME_W, FRAME_H, escala_atual)
+            
         now = time.time()
         fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
         t_last = now
+        
         draw_mini_hud(display, fps, stats_str, stats_color)
         cv2.imshow("Stereo Profundidade", display)
+        
         k = cv2.waitKey(1) & 0xFF
         if k in [ord("q"), 27]:
             break
@@ -551,14 +604,17 @@ def main():
         elif k == ord("r"):
             sgbm.reset()
             left_m, right_m, wls = sgbm.build()
-
+            
+    # Se usar o streamer, fecha os descritores de pipe ao sair
+    # streamer.stdin.close()
+    # streamer.wait()
+    
     cam0.stop()
     cam1.stop()
     if arduino is not None:
         arduino.close()
     cv2.destroyAllWindows()
     print("[OK] Encerrado graciosamente")
-
 
 if __name__ == "__main__":
     main()
