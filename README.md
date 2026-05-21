@@ -1,4 +1,5 @@
 
+
 # GD70 - Controle de Esfera
 
 ![Status](https://img.shields.io/badge/Status-Em%20Desenvolvimento-yellow)
@@ -23,6 +24,8 @@ Defina um IP estático na interface Ethernet (`eth0`) para comunicação direta 
 
 <img width="958" height="530" alt="image" src="https://github.com/user-attachments/assets/a4ee5a9d-f3ec-4ccd-8239-9e731bbafc30" />
 
+Essas configurações de rede estão automatizadas rodando o comando `./start_video.sh`. Se não rodar, habilite a Raspberry para rodar o bash como um executável com `chmod +x start_video.sh` e tente de novo.
+
 ### 2. Download
 Clone o repositório na sua Raspberry:
     `git clone https://github.com/GlobalDrones/GD70-Controle-de-esfera.git`
@@ -32,16 +35,16 @@ Clone o repositório na sua Raspberry:
  -  Atualizar a Raspberry:
 	 - `sudo apt update && sudo apt install python3-venv -y`
  - Ativar o virtual enviroment
-	 - `cd Raspberry/python_stereo_camera_calibrate/`
-	 - `python3 -m venv python_stereo_camera_calibrate/env`
-	 - `source python_stereo_camera_calibrate/env/bin/activate`
+	 - `cd Raspberry/gd70_control/`
+	 - `python3 -m venv gd70_control/env`
+	 - `source gd70_control/env/bin/activate`
 	 - `pip install -r requirements.txt` (se não funcionar, observar mensagem de erros sobre 'externally managed enviroment')
   - Calibrar as cameras para estereoscopia conforme as referencias listadas no fim deste README.
-	  - `python3 calib.py`
+	  - `python3 Calibration/calib.py`
 
 ### 4. Execução
-- em `python_stereo_camera_calibrate/`:
--- `python3 depth_map.py`
+- em `gd70_control/`:
+-- `python3 main.py`
 
 ## Referências
 -   O repositório [stereo_vision (OmidAlekasir)](https://github.com/OmidAlekasir/stereo_vision) fornece código de exemplo para testar configurações de visão estéreo, uma técnica de processamento de imagem utilizada para estimativa de profundidade. O projeto enfatiza que uma calibração de alta qualidade é necessária para corrigir a distorções da lente e alinhar as câmeras.
