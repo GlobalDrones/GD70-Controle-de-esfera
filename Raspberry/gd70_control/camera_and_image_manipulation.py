@@ -197,19 +197,50 @@ class SGBMParams:
 # ===========================================================================
 def draw_mini_hud(frame, fps, stats_str, stats_color):
     h, w = frame.shape[:2]
-    # Retângulo estendido em altura (85px) para caber os dados da STM32 sem sobreposição
-    cv2.rectangle(frame, (0, 0), (min(w, 1100), 85), (0, 0, 0), -1)
-    
-    # Linha 1: Dados de Visão Estereoscópica e FPS
-    cv2.putText(frame, f"FPS: {fps:.1f} | {stats_str}", (10, 25),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.55, (0, 255, 200), 1)
-                
-    # Linha 2: Telemetria da STM32 (Lida assincronamente da Thread paralela)
-    str_motores = (f"STM32 Real -> Yaw: {telemetria_dados['yaw']:+.1f}° | "
-                   f"GiroZ: {telemetria_dados['rate_z']:+.1f}°/s | "
-                   f"PWM_BF: {telemetria_dados['pwm_bf']}us | "
-                   f"PWM_AS: {telemetria_dados['pwm_as']}us | "
-                   f"Erro PID: {telemetria_dados['erro']:+.1f}°")
-                   
-    cv2.putText(frame, str_motores, (10, 55),
-                cv2.FONT_HERSHEY_SIMPLEX, 0.52, (255, 150, 50), 1)
+
+    # Escala baseada na altura da imagem
+    s = h / 720.0
+
+    margem = max(8, int(12 * s))
+    linha1 = margem + int(18 * s)
+    linha2 = linha1 + int(28 * s)
+
+    altura_hud = linha2 + margem
+
+    # Fundo do HUD
+    cv2.rectangle(frame, (0, 0), (min(w, 1100), altura_hud), (0, 0, 0), -1)
+
+    fonte = max(0.35, 0.55 * s)
+    espessura = max(1, int(s))
+
+    # Linha 1
+    cv2.putText(
+        frame,
+        f"FPS: {fps:.1f} | {stats_str}",
+        (10, linha1),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        fonte,
+        (0, 255, 200),
+        espessura,
+    )
+
+    # Linha 2
+    str_motores = (
+        f"STM32 Real -> Yaw: {telemetria_dados['yaw']:+.1f}° | "
+        f"GiroZ: {telemetria_dados['rate_z']:+.1f}°/s | "
+        f"PWM_BF: {telemetria_dados['pwm_bf']}us | "
+        f"PWM_AS: {telemetria_dados['pwm_as']}us | "
+        f"Erro PID: {telemetria_dados['erro']:+.1f}°"
+    )
+
+    cv2.putText(
+        frame,
+        str_motores,
+        (10, linha2),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        fonte * 0.95,
+        (255, 150, 50),
+        espessura,
+    )
+
+    return altura_hud
