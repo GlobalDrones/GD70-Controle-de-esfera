@@ -14,8 +14,8 @@ from gpiozero import LED # Controle seguro do pino de reset na Raspberry Pi 5
 # ===========================================================================
 #CAM0_ID = "rtsp://192.168.144.25:8554/main.264"  # camera esquerda
 #CAM1_ID = "rtsp://192.168.144.2:8554/main.264"   # camera direita
-CAM0_ID = "/dev/video0"
-CAM1_ID = "/dev/video2"
+CAM0_ID = "/dev/camera_esquerda"
+CAM1_ID = "/dev/camera_direita"
 FRAME_W = 1280
 FRAME_H = 720
 
