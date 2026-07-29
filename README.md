@@ -1,53 +1,159 @@
-
-
 # GD70 - Controle de Esfera
 
 ![Status](https://img.shields.io/badge/Status-Em%20Desenvolvimento-yellow)
 ![Tech](https://img.shields.io/badge/Hardware-Arduino%20%2F%20ESP32-blue)
-![Tech](https://img.shields.io/badge/-RaspberryPi-C51A4A?style=for-the-badge&logo=Raspberry-Pi)
+![Tech](https://img.shields.io/badge/-RaspberryPi-C51A4A?style=for-the-badge\&logo=Raspberry-Pi)
 
 Este repositório contém o firmware e os algoritmos de processamento de imagem do **GD70**, um sistema desenvolvido pela **Global Drones** para o alinhamento automático de um gimbal com base em referências lineares detectadas por vídeo.
 
-## 🛠️ Guia Prático: Configuração Raspberry Pi
+# 🛠️ Guia Prático: Configuração Raspberry Pi
 
-Para operar o sistema em campo, siga os passos de configuração de rede e visualização.
+## 1. Download
 
-### 1. Configuração de Rede
-Defina um IP estático na interface Ethernet (`eth0`) para comunicação direta com as câmeras.
+Clone o repositório na Raspberry Pi:
 
-| Comando | Descrição |
-| :--- | :--- |
-| `sudo ip addr add 192.168.144.100/24 dev eth0` | Atribui o IP `192.168.144.100`. |
-| `sudo ip link set eth0 up` | Ativa a interface de rede. |
-| `vlc rtsp://192.168.144.26:8554/main.264` | Testa stream 1 (opcional)|
-| `vlc rtsp://192.168.144.2:8554/main.264` | Testa stream 2 (opcional)
+```bash
+git clone https://github.com/GlobalDrones/GD70-Controle-de-esfera.git
+```
 
-<img width="958" height="530" alt="image" src="https://github.com/user-attachments/assets/a4ee5a9d-f3ec-4ccd-8239-9e731bbafc30" />
+---
 
-Essas configurações de rede estão automatizadas rodando o comando `./start_video.sh`. Se não rodar, habilite a Raspberry para rodar o bash como um executável com `chmod +x start_video.sh` e tente de novo.
+## 2. Configuração das câmeras USB
 
-### 2. Download
-Clone o repositório na sua Raspberry:
-    `git clone https://github.com/GlobalDrones/GD70-Controle-de-esfera.git`
+O sistema utiliza duas câmeras USB para visão estéreo. Para evitar que a numeração (`/dev/video0`, `/dev/video1`, etc.) mude a cada reinicialização, recomenda-se criar nomes fixos para cada câmera.
 
-### 3. Cailbração
- Dentro do repositório:
- -  Atualizar a Raspberry:
-	 - `sudo apt update && sudo apt install python3-venv -y`
- - Ativar o virtual enviroment
-	 - `cd Raspberry/gd70_control/`
-	 - `python3 -m venv gd70_control/env`
-	 - `source gd70_control/env/bin/activate`
-	 - `pip install -r requirements.txt` (se não funcionar, observar mensagem de erros sobre 'externally managed enviroment')
-  - Calibrar as cameras para estereoscopia conforme as referencias listadas no fim deste README.
-	  - `python3 Calibration/calib.py`
+### Verificar se as câmeras foram detectadas
 
-### 4. Execução
-- em `gd70_control/`:
--- `python3 main.py`
+```bash
+v4l2-ctl --list-devices
+```
 
-## Referências
--   O repositório [stereo_vision (OmidAlekasir)](https://github.com/OmidAlekasir/stereo_vision) fornece código de exemplo para testar configurações de visão estéreo, uma técnica de processamento de imagem utilizada para estimativa de profundidade. O projeto enfatiza que uma calibração de alta qualidade é necessária para corrigir a distorções da lente e alinhar as câmeras.
-    
+Exemplo:
 
-- O repositório [python_stereo_camera_calibrate (TemugeB)](https://github.com/TemugeB/python_stereo_camera_calibrate) fornece um script para calibração baseado em Python. O objetivo é obter parâmetros 3D através de triangulação, capturando frames pareados das duas câmeras para calcular as matrizes de rotação e translação entre elas.
+```
+USB 2.0 Camera: USB Camera (usb-xhci-hcd.0-2):
+    /dev/video0
+    /dev/video1
+
+USB 2.0 Camera: USB Camera (usb-xhci-hcd.1-2):
+    /dev/video2
+    /dev/video3
+```
+
+### Descobrir o identificador de cada câmera
+
+Execute:
+
+```bash
+udevadm info --attribute-walk --name=/dev/video0
+```
+
+e
+
+```bash
+udevadm info --attribute-walk --name=/dev/video2
+```
+
+Procure o atributo `KERNELS`, por exemplo:
+
+```
+KERNELS=="1-2:1.0"
+```
+
+e
+
+```
+KERNELS=="2-2:1.0"
+```
+
+### Criar regras do udev
+
+Crie o arquivo:
+
+```bash
+sudo nano /etc/udev/rules.d/99-cameras.rules
+```
+
+Adicione regras semelhantes às abaixo (substituindo os valores de `KERNELS` pelos encontrados na etapa anterior):
+
+```text
+SUBSYSTEM=="video4linux", KERNELS=="1-2:1.0", ATTR{index}=="0", SYMLINK+="camera_esquerda"
+SUBSYSTEM=="video4linux", KERNELS=="2-2:1.0", ATTR{index}=="0", SYMLINK+="camera_direita"
+```
+
+Recarregue as regras:
+
+```bash
+sudo udevadm control --reload-rules
+sudo udevadm trigger
+```
+
+Verifique se os links foram criados:
+
+```bash
+ls -l /dev/camera_*
+```
+
+Resultado esperado:
+
+```
+/dev/camera_esquerda -> video0
+/dev/camera_direita -> video2
+```
+
+O software utiliza esses nomes fixos, portanto a ordem de enumeração dos dispositivos `/dev/video*` deixa de ser relevante.
+
+---
+
+## 3. Configuração do ambiente
+
+Dentro do repositório:
+
+Atualize os pacotes necessários:
+
+```bash
+sudo apt update
+sudo apt install python3-venv -y
+```
+
+Crie e ative o ambiente virtual:
+
+```bash
+cd Raspberry/gd70_control/
+python3 -m venv env
+source env/bin/activate
+```
+
+Instale as dependências:
+
+```bash
+pip install -r requirements.txt
+```
+
+Caso ocorra algum erro relacionado a **externally managed environment**, siga as instruções apresentadas pelo próprio `pip`.
+
+---
+
+## 4. Calibração
+
+Calibre as câmeras para visão estéreo conforme as referências listadas ao final deste README.
+
+```bash
+python3 Calibration/calib.py
+```
+
+---
+
+## 5. Execução
+
+No diretório `gd70_control`:
+
+```bash
+python3 main.py
+```
+
+# Referências
+
+* O repositório **stereo_vision (OmidAlekasir)** fornece código de exemplo para testar configurações de visão estéreo, técnica utilizada para estimativa de profundidade. O projeto enfatiza que uma calibração de alta qualidade é necessária para corrigir as distorções das lentes e alinhar corretamente as câmeras.
+
+* O repositório **python_stereo_camera_calibrate (TemugeB)** fornece um script de calibração em Python para obtenção dos parâmetros estereoscópicos através de triangulação, capturando pares de imagens para calcular as matrizes de rotação e translação entre as câmeras.
