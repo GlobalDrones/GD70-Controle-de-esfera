@@ -15,6 +15,13 @@ Clone o repositório na Raspberry Pi:
 ```bash
 git clone https://github.com/GlobalDrones/GD70-Controle-de-esfera.git
 ```
+---
+
+## 2. Hardware
+
+Conecte os periféricos à Raspberry conforme as imagens:
+
+<img width="1172" height="652" alt="image" src="https://github.com/user-attachments/assets/7b779344-d682-46d3-a5da-0d9b4a5eca8b" />
 
 ---
 
