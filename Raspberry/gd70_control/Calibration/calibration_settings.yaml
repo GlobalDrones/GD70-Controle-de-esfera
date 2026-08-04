@@ -1,5 +1,5 @@
-camera0 : "/dev/camera_esquerda"
-camera1 : "/dev/camera_direita"
+camera0 = "/dev/camera_esquerda"
+camera1 = "/dev/camera_direita"
 frame_width: 1280
 frame_height: 720
 mono_calibration_frames: 15

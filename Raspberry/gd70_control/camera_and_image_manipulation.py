@@ -77,7 +77,12 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
 
     # Maior contorno
     contour = max(contours, key=cv2.contourArea)
+    debug = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
 
+    for c in contours:
+        cv2.drawContours(debug, [c], -1, (0,255,0), 2)
+
+    cv2.imshow("contours", debug)
     # Ajusta reta
     vx, vy, x0, y0 = cv2.fitLine(
         contour,
@@ -87,10 +92,13 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
         0.01
     )
 
-    vx = float(vx)
-    vy = float(vy)
-    x0 = float(x0)
-    y0 = float(y0)
+    vx, vy, x0, y0 = [v.item() for v in cv2.fitLine(
+        contour,
+        cv2.DIST_L2,
+        0,
+        0.01,
+        0.01
+    )]
 
     # Gera um segmento suficientemente grande
     comprimento = roi_radius
