@@ -15,7 +15,7 @@ def main():
     scale_mgr = ScaleManager(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, FRAME_W, FRAME_H)
     sgbm = SGBMParams()
     left_m, right_m, wls = sgbm.build()
-    cam0 = AsyncCamera(CAM0_ID, "cam0-esq", FRAME_W, FRAME_H)
+    cam0 = AsyncCamera(CAM0_ID, "cam1-dir", FRAME_W, FRAME_H)
     cam1 = AsyncCamera(CAM1_ID, "cam1-dir", FRAME_W, FRAME_H)
     if not cam0.start() or not cam1.start():
         if arduino is not None: arduino.close()
@@ -50,7 +50,9 @@ def main():
     
     while True:
         f0 = cam0.read()
+        f0 = cv2.flip(f0,-1)
         f1 = cam1.read()
+        f1 = cv2.flip(f1,-1)
         if f0 is None or f1 is None:
             time.sleep(0.005)
             continue
@@ -176,10 +178,10 @@ def main():
         elif k == ord("-"):
             sgbm.dec_disp()
             left_m, right_m, wls = sgbm.build()
-        elif k == ord("a"):
+        elif k == ord("A"):
             sgbm.inc_min_disp()
             left_m, right_m, wls = sgbm.build()
-        elif k == ord("s"):
+        elif k == ord("S"):
             sgbm.dec_min_disp()
             left_m, right_m, wls = sgbm.build()
         elif k == ord("b"):
@@ -188,6 +190,19 @@ def main():
         elif k == ord("r"):
             sgbm.reset()
             left_m, right_m, wls = sgbm.build()
+        elif k == ord("i"): # seta pra cima
+            send_cmd_serial("w")
+        elif k == ord("k"): # seta pra baixo
+            send_cmd_serial("s")
+        elif k == ord("j"): # seta pra esquerda
+            send_cmd_serial("a")
+        elif k == ord("l"): # seta pra direita
+            send_cmd_serial("d")
+        elif k in [ord('p'),ord('P')]: #para BTS
+            send_cmd_serial('c')
+        elif k in [ord('o'),ord('O')]: #para L298N
+            send_cmd_serial('x')
+        
             
     # Se usar o streamer, fecha os descritores de pipe ao sair
     # streamer.stdin.close()
