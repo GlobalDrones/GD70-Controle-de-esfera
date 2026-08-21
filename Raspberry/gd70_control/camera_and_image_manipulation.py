@@ -84,13 +84,7 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
 
     cv2.imshow("contours", debug)
     # Ajusta reta
-    vx, vy, x0, y0 = cv2.fitLine(
-        contour,
-        cv2.DIST_L2,
-        0,
-        0.01,
-        0.01
-    )
+
 
     vx, vy, x0, y0 = [v.item() for v in cv2.fitLine(
         contour,
@@ -112,33 +106,43 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
     # Calcula profundidade média ao longo da reta
     n = int(np.hypot(x2 - x1, y2 - y1))
 
-    profundidades = []
+    # Gera os pontos ao longo da reta
+    xs = np.linspace(x1, x2, n).astype(np.int32)
+    ys = np.linspace(y1, y2, n).astype(np.int32)
 
-    xs = np.linspace(x1, x2, n).astype(int)
-    ys = np.linspace(y1, y2, n).astype(int)
+    h, w = disp.shape[:2]
 
-    for px, py in zip(xs, ys):
+    # Remove pontos fora da imagem
+    valid = (
+        (xs >= 0) &
+        (ys >= 0) &
+        (xs < w) &
+        (ys < h)
+    )
 
-        if (
-            px < 0 or
-            py < 0 or
-            px >= disp.shape[1] or
-            py >= disp.shape[0]
-        ):
-            continue
+    xs = xs[valid]
+    ys = ys[valid]
 
-        d = disp[py, px]
+    # Obtém todas as disparidades de uma vez
+    d = disp[ys, xs]
 
-        if d > 0:
-            z = focal * baseline / d
+    # Mantém apenas disparidades válidas
+    d = d[d > 0]
 
-            if z <= 3.0:
-                profundidades.append(z)
-
-    if len(profundidades) == 0:
+    if d.size == 0:
         return None, None, None, roi_bin
 
-    distancia = float(np.mean(profundidades))
+    # Calcula todas as profundidades de uma vez
+    z = focal * baseline / d
+
+    # Mantém apenas profundidades até 3 metros
+    z = z[z <= 3.0]
+
+    if z.size == 0:
+        return None, None, None, roi_bin
+
+    # Profundidade média
+    distancia = float(np.mean(z))
 
     angle = np.degrees(np.arctan2(vx, vy))
 
@@ -195,12 +199,12 @@ class SGBMParams:
     BLOCKS = [3, 5, 7, 9, 11]
 
     def __init__(self):
-        self.num_disp = 64
+        self.num_disp = 32
         self.min_disp = 0
         self.block_idx = 1
 
     def reset(self):
-        self.num_disp = 64
+        self.num_disp = 32
         self.min_disp = 0
         self.block_idx = 1
 

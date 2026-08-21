@@ -15,7 +15,7 @@ def main():
     scale_mgr = ScaleManager(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, FRAME_W, FRAME_H)
     sgbm = SGBMParams()
     left_m, right_m, wls = sgbm.build()
-    cam0 = AsyncCamera(CAM0_ID, "cam1-dir", FRAME_W, FRAME_H)
+    cam0 = AsyncCamera(CAM0_ID, "cam0-esq", FRAME_W, FRAME_H)
     cam1 = AsyncCamera(CAM1_ID, "cam1-dir", FRAME_W, FRAME_H)
     if not cam0.start() or not cam1.start():
         if arduino is not None: arduino.close()
@@ -48,14 +48,21 @@ def main():
     # Se quiser testar o streamer de vídeo via FFmpeg, descomente as duas linhas abaixo:
     # streamer = iniciar_streamer(FRAME_W, FRAME_H, SCALES[scale_key])
     
+    prof = Profiler(print_every=30)
+    
     while True:
+        prof.start("capture")
         f0 = cam0.read()
-        f0 = cv2.flip(f0,-1)
+        f0 = cv2.flip(f0, -1)
         f1 = cam1.read()
-        f1 = cv2.flip(f1,-1)
+        f1 = cv2.flip(f1, -1)
+        prof.stop()
+
         if f0 is None or f1 is None:
             time.sleep(0.005)
             continue
+
+        prof.start("remap")
         data = scale_mgr.get()
         out_size = data["size"]
         map1x, map1y, map2x, map2y, Q, focal, baseline = data["maps"]
@@ -65,16 +72,28 @@ def main():
             f1 = cv2.resize(f1, out_size)
         rect_l = cv2.remap(f0, map1x, map1y, cv2.INTER_LINEAR)
         rect_r = cv2.remap(f1, map2x, map2y, cv2.INTER_LINEAR)
+        prof.stop()
+
         stats_str = "NUVEM CENTRAL -> Sem dados validos na area"
-        stats_color = (255, 255, 0)  
+        stats_color = (255, 255, 0)
+
+        prof.start("stereo_match")
         gl = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
         gr = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
         dl = left_m.compute(gl, gr)
         if use_wls:
             dr = right_m.compute(gr, gl)
-            disp = wls.filter(dl, rect_l, None, dr).astype(np.float32) / 16.0
+            disp = wls.filter(
+                dl,
+                rect_l,
+                None,
+                dr
+            ).astype(np.float32) / 16.0
         else:
             disp = dl.astype(np.float32) / 16.0
+        prof.stop()
+
+        prof.start("disp_postproc")
         mask = disp > sgbm.min_disp
         valid_disp = disp[mask]
         if len(valid_disp) > 0:
@@ -89,15 +108,19 @@ def main():
         else:
             disp_vis = cv2.applyColorMap(np.uint8(disp_norm), cv2.COLORMAP_JET)
         disp_vis[~mask] = 0
-        
+        prof.stop()
+
+        prof.start("hough")
         hough_vis = rect_l.copy()
         cx, cy = out_size[0] // 2, out_size[1] // 2
         roi_radius = int(160 * SCALES[scale_key])
-        
+
         angulo, linha, dist_alvo, roi_bin = detectar_linha_mais_proxima(
             rect_l, disp, focal, baseline, cx, cy, roi_radius
         )
-        
+        prof.stop()
+
+        prof.start("draw_viz")
         bin_vis = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
         if angulo is not None:
             if angulo > 90:
@@ -107,18 +130,18 @@ def main():
             stats_str = f"ALVO FIXADO -> Dist: {dist_alvo:.2f}m | Angulo: {angulo:.1f} deg | Med: {media_angulo:.1f} deg"
             stats_color = (0, 255, 0)
             x1, y1, x2, y2 = linha
-            
+
             cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
             cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
             cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
-            
+
             # Envia o ângulo processado pela câmera via cabo USB para a Black Pill
             send_ang_serial(media_angulo)
-            
+
         cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
         cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
         cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
-        
+
         step = int(35 * SCALES[scale_key])
         for dy in range(-roi_radius + 15, roi_radius, step):
             for dx in range(-roi_radius + 15, roi_radius, step):
@@ -141,23 +164,27 @@ def main():
         cv2.putText(bin_vis, "Binarizacao", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
         cv2.putText(disp_vis, "Profundidade", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-        # Junta as três matrizes redimensionadas horizontalmente (Lado a Lado)
         display = cv2.hconcat([hough_vis, bin_vis, disp_vis])
-        
+        prof.stop()
+
         # Se usar o streamer do FFmpeg ativo, envie os bytes aqui:
         # try:
         #     streamer.stdin.write(display.tobytes())
         # except Exception as e:
         #     escala_atual = SCALES[scale_key]
         #     streamer = iniciar_streamer(FRAME_W, FRAME_H, escala_atual)
-            
+
         now = time.time()
         fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
         t_last = now
-        
+
+        prof.start("imshow")
         draw_mini_hud(display, fps, stats_str, stats_color)
         cv2.imshow("Stereo Profundidade", display)
-        
+        prof.stop()
+
+        prof.tick()
+
         k = cv2.waitKey(1) & 0xFF
         if k in [ord("q"), 27]:
             break
@@ -190,30 +217,18 @@ def main():
         elif k == ord("r"):
             sgbm.reset()
             left_m, right_m, wls = sgbm.build()
-        elif k == ord("i"): # seta pra cima
+        elif k == ord("i"):  # seta pra cima
             send_cmd_serial("w")
-        elif k == ord("k"): # seta pra baixo
+        elif k == ord("k"):  # seta pra baixo
             send_cmd_serial("s")
-        elif k == ord("j"): # seta pra esquerda
+        elif k == ord("j"):  # seta pra esquerda
             send_cmd_serial("a")
-        elif k == ord("l"): # seta pra direita
+        elif k == ord("l"):  # seta pra direita
             send_cmd_serial("d")
-        elif k in [ord('p'),ord('P')]: #para BTS
+        elif k in [ord('p'), ord('P')]:  # para BTS
             send_cmd_serial('c')
-        elif k in [ord('o'),ord('O')]: #para L298N
+        elif k in [ord('o'), ord('O')]:  # para L298N
             send_cmd_serial('x')
-        
-            
-    # Se usar o streamer, fecha os descritores de pipe ao sair
-    # streamer.stdin.close()
-    # streamer.wait()
-    
-    cam0.stop()
-    cam1.stop()
-    if arduino is not None:
-        arduino.close()
-    cv2.destroyAllWindows()
-    print("[OK] Encerrado graciosamente")
 
 if __name__ == "__main__":
     main()

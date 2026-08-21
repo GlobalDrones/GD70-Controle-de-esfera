@@ -8,6 +8,7 @@ from collections import deque
 import serial
 import subprocess
 from gpiozero import LED # Controle seguro do pino de reset na Raspberry Pi 5
+from collections import defaultdict
 
 # ===========================================================================
 # CONFIGURACOES DE IMAGEM E REDE
@@ -49,5 +50,31 @@ def load_params():
         T_rel = T_rel / 100.0
         baseline_m = abs(float(T_rel[0][0]))
     return cmtx0, dist0, cmtx1, dist1, R_rel, T_rel
+    
+
+
+class Profiler:
+    def __init__(self, print_every=30):
+        self.acc = defaultdict(float)
+        self.count = 0
+        self.print_every = print_every
+        self._t0 = None
+        self._label = None
+
+    def start(self, label):
+        self._label = label
+        self._t0 = time.perf_counter()
+
+    def stop(self):
+        self.acc[self._label] += (time.perf_counter() - self._t0) * 1000  # ms
+
+    def tick(self):
+        self.count += 1
+        if self.count >= self.print_every:
+            parts = " | ".join(f"{k}: {v/self.count:.1f}ms" for k, v in self.acc.items())
+            total = sum(self.acc.values()) / self.count
+            print(f"[PROFILE] {parts} | TOTAL: {total:.1f}ms")
+            self.acc.clear()
+            self.count = 0
 
 
