@@ -21,19 +21,24 @@ telemetria_dados = {
 
 def resetar_stm32():
     print("[INFO] Enviando sinal de RESET físico para a STM32 (Black Pill)...")
+
     try:
-        # Garante que o pino começa em HIGH (3.3V)
-        stm_reset = LED(PINO_RESET_STM, active_high=True, initial_value=True)
-        
-        # Puxa o pino R (NRST) para LOW (GND) por 100ms para forçar o reset
+        stm_reset = LED(
+            PINO_RESET_STM,
+            active_high=True,
+            initial_value=True
+        )
+
         stm_reset.off()
         time.sleep(0.1)
-        
-        # Solta o pino de volta para HIGH
         stm_reset.on()
-        print("[OK] STM32 liberada! Aguardando estabilização do setup e calibração...")
-        stm_reset.close() 
-        time.sleep(1.5) # Tempo necessário para a calibração do MPU em bancada
+
+        print("[OK] STM32 liberada! Aguardando estabilização...")
+
+        stm_reset.close()
+
+        time.sleep(1.5)
+
     except Exception as e:
         print(f"[AVISO] Falha ao gerenciar pino GPIO de Reset: {e}")
 

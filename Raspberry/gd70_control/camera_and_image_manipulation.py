@@ -82,7 +82,7 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
     for c in contours:
         cv2.drawContours(debug, [c], -1, (0,255,0), 2)
 
-    cv2.imshow("contours", debug)
+    #cv2.imshow("contours", debug)
     # Ajusta reta
 
 
