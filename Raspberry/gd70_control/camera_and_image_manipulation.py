@@ -42,114 +42,104 @@ def build_rectification(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, img_size):
 def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radius):
     gray = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
     blurred = cv2.GaussianBlur(gray, (5, 5), 0)
-
-    _, bin_img = cv2.threshold(
-        blurred,
-        60,
-        255,
-        cv2.THRESH_BINARY_INV
-    )
-
-    # Fecha pequenos buracos
-    kernel = np.ones((3, 3), np.uint8)
-    bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel)
-
-    bin_img = cv2.dilate(bin_img, kernel, iterations=1)
-    # ROI circular
-    mask = np.zeros_like(bin_img)
+    _, bin_img = cv2.threshold(blurred, 60, 255, cv2.THRESH_BINARY_INV)
+    mask = np.zeros_like(gray)
     cv2.circle(mask, (cx, cy), roi_radius, 255, -1)
-    roi_bin = cv2.bitwise_and(bin_img, mask)
+    roi_bin = cv2.bitwise_and(bin_img, bin_img, mask=mask)
+    edges = cv2.Canny(roi_bin, 50, 150)
 
-    contours, _ = cv2.findContours(
-        roi_bin,
-        cv2.RETR_EXTERNAL,
-        cv2.CHAIN_APPROX_NONE
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=40,
+        minLineLength=roi_radius // 3,
+        maxLineGap=20,
     )
+    if lines is None:
+        return None, None, None, roi_bin
+    melhor_linha = None
+    menor_distancia_media = float("inf")
 
-    if len(contours) == 0:
+    for l in lines:
+        x1, y1, x2, y2 = l[0]
+        num_points = int(np.hypot(x2 - x1, y2 - y1))
+        if num_points == 0:
+            continue
+        x_coords = np.linspace(x1, x2, num_points).astype(int)
+        y_coords = np.linspace(y1, y2, num_points).astype(int)
+        profundidades_validas = []
+        for px, py in zip(x_coords, y_coords):
+            if py >= disp.shape[0] or px >= disp.shape[1] or py < 0 or px < 0:
+                continue
+            d = disp[py, px]
+            if d > 0:
+                Z = (focal * baseline) / d
+                if Z <= 3.0:
+                    profundidades_validas.append(Z)
+
+        if len(profundidades_validas) > (num_points * 0.3):
+            distancia_media = np.mean(profundidades_validas)
+            if distancia_media < menor_distancia_media:
+                menor_distancia_media = distancia_media
+                melhor_linha = (x1, y1, x2, y2)
+
+    if melhor_linha is None:
         return None, None, None, roi_bin
 
-    # Descarta contornos pequenos
-    contours = [c for c in contours if cv2.contourArea(c) > 100]
-
-    if len(contours) == 0:
-        return None, None, None, roi_bin
-
-    # Maior contorno
-    contour = max(contours, key=cv2.contourArea)
-    debug = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
-
-    for c in contours:
-        cv2.drawContours(debug, [c], -1, (0,255,0), 2)
-
-    #cv2.imshow("contours", debug)
-    # Ajusta reta
-
-
-    vx, vy, x0, y0 = [v.item() for v in cv2.fitLine(
-        contour,
-        cv2.DIST_L2,
-        0,
-        0.01,
-        0.01
-    )]
-
-    # Gera um segmento suficientemente grande
-    comprimento = roi_radius
-
-    x1 = int(x0 - vx * comprimento)
-    y1 = int(y0 - vy * comprimento)
-
-    x2 = int(x0 + vx * comprimento)
-    y2 = int(y0 + vy * comprimento)
-
-    # Calcula profundidade média ao longo da reta
-    n = int(np.hypot(x2 - x1, y2 - y1))
-
-    # Gera os pontos ao longo da reta
-    xs = np.linspace(x1, x2, n).astype(np.int32)
-    ys = np.linspace(y1, y2, n).astype(np.int32)
-
-    h, w = disp.shape[:2]
-
-    # Remove pontos fora da imagem
-    valid = (
-        (xs >= 0) &
-        (ys >= 0) &
-        (xs < w) &
-        (ys < h)
-    )
-
-    xs = xs[valid]
-    ys = ys[valid]
-
-    # Obtém todas as disparidades de uma vez
-    d = disp[ys, xs]
-
-    # Mantém apenas disparidades válidas
-    d = d[d > 0]
-
-    if d.size == 0:
-        return None, None, None, roi_bin
-
-    # Calcula todas as profundidades de uma vez
-    z = focal * baseline / d
-
-    # Mantém apenas profundidades até 3 metros
-    z = z[z <= 3.0]
-
-    if z.size == 0:
-        return None, None, None, roi_bin
-
-    # Profundidade média
-    distancia = float(np.mean(z))
-
-    angle = np.degrees(np.arctan2(vx, vy))
-
+    x1, y1, x2, y2 = melhor_linha
+    angle = np.degrees(np.arctan2(x2 - x1, y2 - y1))
     if angle < 0:
         angle = 90 + abs(angle)
+    return angle, melhor_linha, menor_distancia_media, roi_bin
 
-    return angle, (x1, y1, x2, y2), distancia, roi_bin
+
+def detectar_linha_mono(rect_l, cx, cy, roi_radius):
+    """
+    Variante de detectar_linha_mais_proxima() para quando só uma camera
+    esta ativa: sem disparidade, entao nao ha como filtrar/ordenar por
+    profundidade (Z). Em vez disso escolhe a linha cujo ponto medio fica
+    mais perto do centro da ROI (aproximacao razoavel do alvo).
+    Retorna (angulo, linha, None, roi_bin) -- dist_alvo sempre None.
+    """
+    gray = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
+    blurred = cv2.GaussianBlur(gray, (5, 5), 0)
+    _, bin_img = cv2.threshold(blurred, 60, 255, cv2.THRESH_BINARY_INV)
+    mask = np.zeros_like(gray)
+    cv2.circle(mask, (cx, cy), roi_radius, 255, -1)
+    roi_bin = cv2.bitwise_and(bin_img, bin_img, mask=mask)
+    edges = cv2.Canny(roi_bin, 50, 150)
+
+    lines = cv2.HoughLinesP(
+        edges,
+        1,
+        np.pi / 180,
+        threshold=40,
+        minLineLength=roi_radius // 3,
+        maxLineGap=20,
+    )
+    if lines is None:
+        return None, None, None, roi_bin
+
+    melhor_linha = None
+    menor_dist_centro = float("inf")
+    for l in lines:
+        x1, y1, x2, y2 = l[0]
+        mx, my = (x1 + x2) / 2.0, (y1 + y2) / 2.0
+        d = np.hypot(mx - cx, my - cy)
+        if d < menor_dist_centro:
+            menor_dist_centro = d
+            melhor_linha = (x1, y1, x2, y2)
+
+    if melhor_linha is None:
+        return None, None, None, roi_bin
+
+    x1, y1, x2, y2 = melhor_linha
+    angle = np.degrees(np.arctan2(x2 - x1, y2 - y1))
+    if angle < 0:
+        angle = 90 + abs(angle)
+    return angle, melhor_linha, None, roi_bin
+
 # ===========================================================================
 # SCALE MANAGER
 # ===========================================================================
@@ -199,12 +189,12 @@ class SGBMParams:
     BLOCKS = [3, 5, 7, 9, 11]
 
     def __init__(self):
-        self.num_disp = 32
+        self.num_disp = 64
         self.min_disp = 0
         self.block_idx = 1
 
     def reset(self):
-        self.num_disp = 32
+        self.num_disp = 64
         self.min_disp = 0
         self.block_idx = 1
 

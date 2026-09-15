@@ -35,9 +35,8 @@ def iniciar_streamer(width, height, scale):
     return subprocess.Popen(command, stdin=subprocess.PIPE)
 
 
-
 # ===========================================================================
-# CLASSE DE CAPTURA ASSINCRONA
+# CLASSE DE CAPTURA ASSÍNCRONA
 # ===========================================================================
 class AsyncCamera:
     def __init__(self, src, name, width, height):
@@ -45,38 +44,110 @@ class AsyncCamera:
         self.name = name
         self.width = width
         self.height = height
+
         self.frame = None
         self.lock = threading.Lock()
+
         self.running = False
         self._cap = None
+        self._thread = None
+
+        # Controle de reconexão
+        self.reconnect_delay = 1.0
+
+    def _open_camera(self):
+        print(f"[INFO] Conectando {self.name}...")
+
+        cap = cv2.VideoCapture(self.src)
+
+        if not cap.isOpened():
+            cap.release()
+            print(f"[ERRO] Nao abriu {self.src}")
+            return False
+
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
+
+        # Descarta alguns frames iniciais
+        for _ in range(5):
+            ret, frame = cap.read()
+            if not ret:
+                break
+
+        self._cap = cap
+
+        print(f"[OK] {self.name} conectada em background")
+        return True
 
     def start(self):
-        print(f"[INFO] Conectando {self.name}...")
-        self._cap = cv2.VideoCapture(self.src)
-        if not self._cap.isOpened():
-            print(f"[ERRO] Nao abriu: {self.src}")
+        if not self._open_camera():
             return False
-        self._cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
-        self._cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
-        self._cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
-        for _ in range(5):
-            self._cap.read()
+
         self.running = True
-        threading.Thread(target=self._loop, daemon=True).start()
-        print(f"[OK] {self.name} conectada em background")
+
+        self._thread = threading.Thread(
+            target=self._loop,
+            daemon=True
+        )
+        self._thread.start()
+
         return True
 
     def _loop(self):
         while self.running:
-            if self._cap is not None and self._cap.isOpened():
-                ret, frame = self._cap.read()
-                if ret and frame is not None and frame.size > 0:
-                    with self.lock:
-                        self.frame = frame
+
+            # ---------------------------------------------------------------
+            # Verifica se temos uma captura válida
+            # ---------------------------------------------------------------
+            if self._cap is None or not self._cap.isOpened():
+
+                print(f"[AVISO] {self.name} desconectada.")
+                print(f"[INFO] Tentando reconectar {self.name}...")
+
+                if self._cap is not None:
+                    self._cap.release()
+                    self._cap = None
+
+                time.sleep(self.reconnect_delay)
+
+                if not self.running:
+                    break
+
+                if self._open_camera():
+                    print(f"[OK] {self.name} reconectada!")
                 else:
-                    time.sleep(0.005)
+                    time.sleep(self.reconnect_delay)
+
+                continue
+
+            # ---------------------------------------------------------------
+            # Tenta capturar frame
+            # ---------------------------------------------------------------
+            ret, frame = self._cap.read()
+
+            if ret and frame is not None and frame.size > 0:
+
+                with self.lock:
+                    self.frame = frame
+
             else:
-                time.sleep(0.1)
+
+                # -----------------------------------------------------------
+                # A câmera provavelmente caiu.
+                #
+                # Libera o VideoCapture para que uma nova instância possa
+                # ser criada quando o dispositivo USB voltar.
+                # -----------------------------------------------------------
+                print(f"[AVISO] Falha ao ler {self.name}. Reconectando...")
+
+                self._cap.release()
+                self._cap = None
+
+                with self.lock:
+                    self.frame = None
+
+                time.sleep(self.reconnect_delay)
 
     def read(self):
         with self.lock:
@@ -84,6 +155,13 @@ class AsyncCamera:
 
     def stop(self):
         self.running = False
-        time.sleep(0.1)
+
+        if self._thread is not None:
+            self._thread.join(timeout=1.0)
+
         if self._cap is not None:
             self._cap.release()
+            self._cap = None
+
+        with self.lock:
+            self.frame = None
