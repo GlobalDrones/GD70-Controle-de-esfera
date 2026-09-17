@@ -2,6 +2,7 @@ from video_streamer import *
 from serial_communication import *
 from camera_and_image_manipulation import *
 from configs import *
+from pwm_input import iniciar_pwm_control
 
 # Inicializa a Thread se houver conexão com o microcontrolador
 if arduino is not None:
@@ -64,6 +65,8 @@ def main():
     # Se quiser testar o streamer de vídeo via FFmpeg, descomente as duas linhas abaixo:
     # streamer = iniciar_streamer(FRAME_W, FRAME_H, SCALES[scale_key])
     
+    iniciar_pwm_control()
+
     while True:
         stats_str = "NUVEM CENTRAL -> Sem dados validos na area"
         stats_color = (255, 255, 0)

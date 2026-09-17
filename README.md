@@ -23,6 +23,28 @@ Conecte os periféricos à Raspberry conforme as imagens:
 
 <img width="1172" height="652" alt="image" src="https://github.com/user-attachments/assets/7b779344-d682-46d3-a5da-0d9b4a5eca8b" />
 
+### Pinagem GPIO (Raspberry Pi)
+
+> ⚠️ Os GPIOs da Raspberry Pi trabalham em **3.3 V** — nunca aplicar 5 V diretamente neles.
+
+**Reset físico da STM32 (Black Pill)**
+
+| Sinal | GPIO (BCM) | Pino físico |
+|---|---|---|
+| Reset STM32 | GPIO18 | 12 |
+
+**Entradas PWM do rádio (Air Unit) — controle manual do gimbal**
+
+| Canal (Air Unit) | GPIO (BCM) | Pino físico | Comando enviado |
+|---|---|---|---|
+| CH12 | GPIO5  | 29 | `w` |
+| CH13 | GPIO6  | 31 | `s` |
+| CH14 | GPIO13 | 33 | `a` |
+| CH15 | GPIO19 | 35 | `d` |
+| GND do Air Unit | — | 6 (GND) | — |
+
+O controle por rádio (PWM) roda em paralelo ao controle por teclado — os dois métodos enviam os mesmos comandos (`w`/`a`/`s`/`d`/`c`) pela serial para a STM32, então podem ser usados alternadamente sem conflito.
+
 ---
 
 ## 2. Configuração das câmeras USB
