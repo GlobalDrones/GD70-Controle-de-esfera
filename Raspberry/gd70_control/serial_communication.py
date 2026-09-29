@@ -19,28 +19,44 @@ telemetria_dados = {
     "yaw": 0.0, "rate_z": 0.0, "pwm_bf": 1500, "pwm_as": 1500, "erro": 0.0, "pid_out": 0.0
 }
 
+def _varrer_portas(ser, timeout):
+    """Tenta abrir alguma das portas até dar timeout (USB pode demorar a reenumerar)."""
+    t_fim = time.time() + timeout
+    while True:
+        for porta in PORTAS_TENTATIVA:
+            try:
+                ser.port = porta
+                ser.open()
+                ser.reset_input_buffer()
+                print(f"[OK] Conectado à STM32 na porta: {porta}")
+                return True
+            except Exception:
+                pass
+        if time.time() >= t_fim:
+            return False
+        time.sleep(0.5)
+
+
 def resetar_stm32():
     print("[INFO] Enviando sinal de RESET físico para a STM32 (Black Pill)...")
 
-    try:
-        stm_reset = LED(
-            PINO_RESET_STM,
-            active_high=True,
-            initial_value=True
-        )
+    # Fecha antes: o USB CDC vai sumir e voltar
+    if arduino is not None and arduino.is_open:
+        arduino.close()
 
+    try:
+        stm_reset = LED(PINO_RESET_STM, active_high=True, initial_value=True)
         stm_reset.off()
         time.sleep(0.1)
         stm_reset.on()
-
-        print("[OK] STM32 liberada! Aguardando estabilização...")
-
         stm_reset.close()
-
-        time.sleep(1.5)
-
     except Exception as e:
         print(f"[AVISO] Falha ao gerenciar pino GPIO de Reset: {e}")
+
+    # Reabre na mesma instância (o main.py guarda referência a esse objeto)
+    if arduino is not None:
+        if not _varrer_portas(arduino, 10):
+            print("[ERRO] STM32 não reapareceu após o reset.")
 
 
 # ===========================================================================
@@ -97,7 +113,10 @@ def thread_leitura_telemetria():
         return
         
     print("[OK] Thread paralela de leitura de telemetria rodando.")
-    while arduino.is_open:
+    while true:
+         if not arduino.is_open:      # durante o reset
+            time.sleep(0.2)
+            continue
         try:
             if arduino.in_waiting > 0:
                 linha = arduino.readline().decode('utf-8', errors='ignore').strip()
