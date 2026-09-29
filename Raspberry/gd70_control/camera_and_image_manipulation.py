@@ -54,7 +54,7 @@ def detectar_linha_mais_proxima(rect_l, disp, focal, baseline, cx, cy, roi_radiu
         np.pi / 180,
         threshold=40,
         minLineLength=roi_radius // 3,
-        maxLineGap=20,
+        maxLineGap=50,
     )
     if lines is None:
         return None, None, None, roi_bin
