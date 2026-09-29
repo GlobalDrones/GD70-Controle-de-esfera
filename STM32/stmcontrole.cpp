@@ -1,32 +1,141 @@
+//* 
 #include <Arduino.h>
 #include <Wire.h>
 #include <Servo.h>
+#include <AS5600.h> // Biblioteca dedicada do AS5600
 
-#define DEADZONE 0
+#define DEADZONE 3
 #define ESC_MIN_POWER 80
 
 // --- LIMITES ABSOLUTOS DE PWM DOS MOTORES ---
-#define LIMIT_PWM_MAX 1650  
-#define LIMIT_PWM_MIN 1350  
+#define LIMIT_PWM_MAX 2000  
+#define LIMIT_PWM_MIN 1000  
 
-// --- PINOS MAPEADOS PARA A STM32F401 (BLACK PILL) ---
+// --- PINOS MAPEADOS PARA A STM32F401/F411 (BLACK PILL) ---
 #define BF_PIN PA0   // Frente
 #define AS_PIN PA1   // Lados
 #define TR_PIN PA6   // Traseira
 
-#define LED_PIN PC13 // LED embutido da STM32
+// ============================================================
+// --- PINOS DA PONTE H BTS7960 ---
+#define EN_R_PIN  PB7 
+#define EN_L_PIN  PB10 
+#define RPWM_PIN  PB6  
+#define LPWM_PIN  PB5 
 
-// --- PINOS DE LEITURA DO RÁDIO SIYI ---
-#define CH1_PIN PB12
-#define CH2_PIN PB13
-#define CH3_PIN PB14
-#define CH4_PIN PB15
-#define CH5_PIN PA8
+// --- DEFINIÇÕES DOS PINOS ---
+// Ponte H L298N (Canal B - ligado em OUT3/OUT4)
+#define IN3_PIN PB12 
+#define IN4_PIN PB13 
+
+// Fins de Curso
+#define FIM_CURSO_CIMA  PB14 
+#define FIM_CURSO_BAIXO PB15 
+
+// Novos pinos para o Sensor Óptico (Encoder / LM393)
+#define SENSOR_OLHAL_D0 PA4 // Conectado ao pino D0 do sensor
+#define SENSOR_OLHAL_A0 PA5 // Conectado ao pino A0 do sensor
+
+// Pinos I2C para o Encoder AS5600 (STM32 - Hardware I2C1)
+#define AS5600_SDA PB9
+#define AS5600_SCL PB8
+
+// LED Onboard (Black Pill - Active LOW)
+#define LED_PIN PC13
+
 
 #define ESC_NEUTRAL 1500
 #define MPU6050_ADDR 0x68
 #define SAMPLES_GYRO 500
 
+
+// INICIALIZAÇÃO DO ENCODER AS5600
+// Instanciando o objeto do Encoder
+AS5600 encoder;
+
+// Estado atual do movimento: 1 = Subindo, -1 = Descendo, 0 = Parado
+int estadoMotor = 0;
+
+// ============================================================
+// --- VARIÁVEIS PARA O FILTRO (DEBOUNCE) DO OLHAL ---
+// ============================================================
+int estadoEstavelOlhal = HIGH; // Iniciamos assumindo que o feixe está bloqueado (sem olhal)     
+int ultimoEstadoFisicoOlhal = HIGH;
+unsigned long ultimoTempoFiltro = 0;
+unsigned long tempoFiltro = 100; // Reduzido para 100ms pois sensor óptico tem menos ruído que mecânico
+// ============================================================
+
+// --- FUNÇÃO DO ENCODER AS5600 (USANDO A BIBLIOTECA) ---
+void lerEncoderAS5600() {
+    if (encoder.isConnected()) {
+        int anguloBruto = encoder.readAngle();
+        float graus = (anguloBruto / 4095.0) * 360.0;
+
+        Serial.print(">> AS5600 - Angulo Bruto: ");
+        Serial.print(anguloBruto);
+        Serial.print(" | Graus: ");
+        Serial.println(graus, 2);
+    } else {
+        Serial.println("[ERRO] AS5600 não encontrado! Verifique a fiação I2C.");
+    }
+}
+
+// --- FUNÇÕES DE CONTROLE DO MOTOR (L298N) ---
+void pararMotor() {
+    digitalWrite(IN3_PIN, LOW);
+    digitalWrite(IN4_PIN, LOW);
+    estadoMotor = 0;
+}
+
+void moverSubir() {
+    digitalWrite(IN3_PIN, HIGH);
+    digitalWrite(IN4_PIN, LOW);
+    estadoMotor = 1;
+    Serial.println(">> Motor L298N: SUBINDO");
+}
+
+void moverDescer() {
+    digitalWrite(IN3_PIN, LOW);
+    digitalWrite(IN4_PIN, HIGH);
+    estadoMotor = -1;
+    Serial.println(">> Motor L298N: DESCENDO");
+}
+
+// --- FUNÇÕES DE CONTROLE DA BTS7960 ---
+void desativarDriver() {
+    digitalWrite(EN_R_PIN, LOW);
+    digitalWrite(EN_L_PIN, LOW);
+}
+
+void ativarDriver() {
+    digitalWrite(EN_R_PIN, HIGH);
+    digitalWrite(EN_L_PIN, HIGH);
+}
+
+void pararBTS() {
+    digitalWrite(RPWM_PIN, LOW);
+    digitalWrite(LPWM_PIN, LOW);
+    digitalWrite(LED_PIN, HIGH); 
+    Serial.println(">> BTS7960: Motor PARADO");
+}
+
+void girarSentidoA() {
+    ativarDriver();
+    digitalWrite(RPWM_PIN, HIGH);
+    digitalWrite(LPWM_PIN, LOW);
+    digitalWrite(LED_PIN, LOW); 
+    Serial.println(">> BTS7960: Girando no SENTIDO A (Direita/Horario)");
+}
+
+void girarSentidoD() {
+    ativarDriver();
+    digitalWrite(RPWM_PIN, LOW);
+    digitalWrite(LPWM_PIN, HIGH);
+    digitalWrite(LED_PIN, LOW); 
+    Serial.println(">> BTS7960: Girando no SENTIDO D (Esquerda/Anti-horario)");
+}
+
+//INICIALIZAÇÃO DO MPU6050
 Servo esc_bf;
 Servo esc_as;
 Servo esc_tr;
@@ -49,22 +158,6 @@ unsigned long last_time;
 unsigned long last_telemetry_time = 0;
 const unsigned long TELEMETRY_INTERVAL = 100; // 10Hz
 
-// --- VARIÁVEIS VOLÁTEIS PARA AS INTERRUPÇÕES DO RÁDIO ---
-volatile int pwm_ch1 = 1500;
-volatile int pwm_ch2 = 1500;
-volatile int pwm_ch3 = 1500;
-volatile int pwm_ch4 = 1500;
-volatile int pwm_ch5 = 1500;
-
-volatile unsigned long timer_ch1, timer_ch2, timer_ch3, timer_ch4, timer_ch5;
-
-// --- FUNÇÕES DE INTERRUPÇÃO DO RÁDIO ---
-void calc_ch1() { if(digitalRead(CH1_PIN)) timer_ch1 = micros(); else pwm_ch1 = micros() - timer_ch1; }
-void calc_ch2() { if(digitalRead(CH2_PIN)) timer_ch2 = micros(); else pwm_ch2 = micros() - timer_ch2; }
-void calc_ch3() { if(digitalRead(CH3_PIN)) timer_ch3 = micros(); else pwm_ch3 = micros() - timer_ch3; }
-void calc_ch4() { if(digitalRead(CH4_PIN)) timer_ch4 = micros(); else pwm_ch4 = micros() - timer_ch4; }
-void calc_ch5() { if(digitalRead(CH5_PIN)) timer_ch5 = micros(); else pwm_ch5 = micros() - timer_ch5; }
-
 float angle_diff(float a, float b) {
   float d = a - b;
   while (d > 180.0) d -= 360.0;
@@ -74,32 +167,30 @@ float angle_diff(float a, float b) {
 
 // --- FUNÇÃO DE DESTRAVAMENTO FÍSICO DO BARRAMENTO I2C ---
 void destravar_barramento_I2C() {
-  pinMode(PB8, OUTPUT);       // SCL como saída
-  pinMode(PB9, INPUT_PULLUP); // SDA como entrada com resistor interno
+  pinMode(AS5600_SCL, OUTPUT);       
+  pinMode(AS5600_SDA, INPUT_PULLUP); 
 
-  // Envia 9 pulsos de clock manuais para forçar o MPU a liberar a linha SDA se estiver travada
   for (int i = 0; i < 9; i++) {
-    digitalWrite(PB8, LOW);
+    digitalWrite(AS5600_SCL, LOW);
     delayMicroseconds(5);
-    digitalWrite(PB8, HIGH);
+    digitalWrite(AS5600_SCL, HIGH);
     delayMicroseconds(5);
   }
 
-  // Força uma condição de STOP manual na linha
-  pinMode(PB9, OUTPUT);
-  digitalWrite(PB9, LOW);
+  pinMode(AS5600_SDA, OUTPUT);
+  digitalWrite(AS5600_SDA, LOW);
   delayMicroseconds(5);
-  digitalWrite(PB8, HIGH);
+  digitalWrite(AS5600_SCL, HIGH);
   delayMicroseconds(5);
-  digitalWrite(PB9, HIGH);
+  digitalWrite(AS5600_SDA, HIGH);
 }
 
 void init_mpu() {
   Wire.beginTransmission(MPU6050_ADDR);
   Wire.write(0x6B);
-  Wire.write(0x00); // Acorda o MPU6050
+  Wire.write(0x00); 
   Wire.endTransmission();
-  
+ 
   Wire.beginTransmission(MPU6050_ADDR);
   Wire.write(0x37);
   Wire.write(0x02);
@@ -119,7 +210,7 @@ void calibrate_gyro() {
   for (int i = 0; i < SAMPLES_GYRO; i++) {
     Wire.beginTransmission(MPU6050_ADDR);
     Wire.write(0x43);
-    if (Wire.endTransmission(false) != 0) { i--; delay(3); continue; } // Ignora falha de pacote no boot
+    if (Wire.endTransmission(false) != 0) { i--; delay(3); continue; } 
 
     Wire.requestFrom(MPU6050_ADDR, 6);
     if (Wire.available() >= 6) {
@@ -129,7 +220,7 @@ void calibrate_gyro() {
       sum_z += raw_z;
     }
 
-    if (i % 25 == 0) { 
+    if (i % 25 == 0) {
       calib_led_state = !calib_led_state;
       digitalWrite(LED_PIN, calib_led_state ? HIGH : LOW);
     }
@@ -142,18 +233,18 @@ void calibrate_gyro() {
 void read_gyro(float dt) {
     Wire.beginTransmission(MPU6050_ADDR);
     Wire.write(0x43);
-    if (Wire.endTransmission(false) != 0) return; // Sai sem travar o loop se houver erro elétrico
+    if (Wire.endTransmission(false) != 0) return; 
 
     Wire.requestFrom(MPU6050_ADDR, 6);
     if (Wire.available() >= 6) {
-        Wire.read(); Wire.read(); 
-        Wire.read(); Wire.read(); 
+        Wire.read(); Wire.read();
+        Wire.read(); Wire.read();
         gyro_z_raw = (int16_t)(Wire.read() << 8 | Wire.read());
 
         float raw_rate = (gyro_z_raw / 131.0) - gyro_offset_z;
         filtered_gyro_rate = (alpha * raw_rate) + ((1.0 - alpha) * filtered_gyro_rate);
 
-        if (abs(filtered_gyro_rate) < 0.5) { 
+        if (abs(filtered_gyro_rate) < 0.5) {
             filtered_gyro_rate = 0.0;
         }
 
@@ -164,7 +255,6 @@ void read_gyro(float dt) {
     }
 }
 
-// --- LEITURA NÃO-BLOQUEANTE DA SERIAL2 ---
 String inputBuffer = "";
 void checar_serial_nao_bloqueante() {
     while (Serial2.available() > 0) {
@@ -173,8 +263,8 @@ void checar_serial_nao_bloqueante() {
             inputBuffer.trim();
             if (inputBuffer.length() > 0) {
                 float camera_angle = inputBuffer.toFloat();
-                yaw_gyro = 0; 
-                desired_yaw = camera_angle; 
+                yaw_gyro = 0;
+                desired_yaw = camera_angle;
             }
             inputBuffer = "";
         } else {
@@ -182,6 +272,45 @@ void checar_serial_nao_bloqueante() {
             if (inputBuffer.length() > 50) inputBuffer = "";
         }
     }
+}
+
+void init_L298() {
+    pinMode(IN3_PIN, OUTPUT);
+    pinMode(IN4_PIN, OUTPUT);
+    pararMotor();
+
+    pinMode(EN_R_PIN, OUTPUT);
+    pinMode(EN_L_PIN, OUTPUT);
+    pinMode(RPWM_PIN, OUTPUT);
+    pinMode(LPWM_PIN, OUTPUT);
+   
+    ativarDriver();
+    pararBTS();
+
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);
+
+    pinMode(FIM_CURSO_CIMA, INPUT_PULLDOWN);
+    pinMode(FIM_CURSO_BAIXO, INPUT_PULLDOWN);
+    
+    // Configura os pinos do Sensor Óptico
+    pinMode(SENSOR_OLHAL_D0, INPUT);
+    pinMode(SENSOR_OLHAL_A0, INPUT); 
+
+    Serial.begin(115200);
+    while (!Serial && millis() < 4000);
+
+    Wire.setSDA(AS5600_SDA);
+    Wire.setSCL(AS5600_SCL);
+    Wire.begin();
+    encoder.begin();
+
+    Serial.println("==============================================");
+    Serial.println(" SISTEMA L298N + BTS7960 + AS5600 INICIADO    ");
+    Serial.println("  L298N:   'w'=Subir | 's'=Descer | 'x'=Parar ");
+    Serial.println("  BTS7960: 'a'=Giro A| 'd'=Giro D | 'c'=Parar ");
+    Serial.println("  AS5600:  'e'=Ler Angulo Atual               ");
+    Serial.println("==============================================");
 }
 
 void setup() {
@@ -195,36 +324,26 @@ void setup() {
   esc_as.writeMicroseconds(ESC_NEUTRAL);
   esc_tr.writeMicroseconds(ESC_NEUTRAL);
 
-  pinMode(CH1_PIN, INPUT); pinMode(CH2_PIN, INPUT);
-  pinMode(CH3_PIN, INPUT); pinMode(CH4_PIN, INPUT);
-  pinMode(CH5_PIN, INPUT);
-
-  attachInterrupt(digitalPinToInterrupt(CH1_PIN), calc_ch1, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(CH2_PIN), calc_ch2, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(CH3_PIN), calc_ch3, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(CH4_PIN), calc_ch4, CHANGE);
-  attachInterrupt(digitalPinToInterrupt(CH5_PIN), calc_ch5, CHANGE);
-
   Serial.begin(115200);
   Serial2.begin(115200);
 
-  // 1. Limpa o curto elétrico do I2C antes de inicializar o periférico Wire
   destravar_barramento_I2C();
 
-  // 2. Inicializa o hardware I2C
-  Wire.setSCL(PB8);
-  Wire.setSDA(PB9);
+  Wire.setSCL(AS5600_SCL);
+  Wire.setSDA(AS5600_SDA);
   Wire.begin();
-  Wire.setTimeout(3); // Destrava em 3ms caso ocorram erros
+  Wire.setTimeout(3); 
   delay(100);
-  
-  // 3. Configura e calibra o sensor
+ 
   init_mpu();
-  calibrate_gyro(); 
-  
+  calibrate_gyro();
+ 
   yaw_gyro = 0;
   last_time = micros();
   last_telemetry_time = millis();
+
+  init_L298();
+
   delay(1000);
 }
 
@@ -236,16 +355,13 @@ void loop() {
     unsigned long now = micros();
     float dt = (now - last_time) / 1000000.0;
     last_time = now;
-    
-    // Evita crash matemático por divisão por zero
+   
     if(dt <= 0.000001) dt = 0.005;
     if(dt > 0.5) dt = 0.01;
 
     checar_serial_nao_bloqueante();
 
-    intensidade_mult = 1.0; 
-
-    // Lê o MPU de forma não bloqueante
+    intensidade_mult = 1.0;
     read_gyro(dt);
 
     // -------- CONTROLE PID --------
@@ -254,17 +370,23 @@ void loop() {
     static float integral_error = 0;
     static float last_error = 0;
 
-    float Kp = 8.6244 * 0.85;  
-    float Ki = 0.541;  
-    float Kd = 14.0426 * 1.25;  
+    float Kp = 5;  
+    float Ki = 1.0;  
+    float Kd = 10; 
+    
+    //float Kp = 6;  
+    //float Ki = 0.5;  
+    //float Kd = 18;  
 
     float P = pos_error * Kp;
 
-    if (abs(pos_error) > (DEADZONE / 3.0)) {
+    /*if (abs(pos_error) > (DEADZONE / 3.0)) {
         integral_error += pos_error * dt;
     } else {
-        integral_error = 0; 
-    }
+        integral_error = 0;
+    }*/
+
+    integral_error += pos_error * dt;
 
     if ((pos_error > 0 && last_error < 0) || (pos_error < 0 && last_error > 0)) {
         integral_error = 0;
@@ -280,27 +402,20 @@ void loop() {
 
     yaw_output = (P + I + D) * intensidade_mult;
 
+// -------- TRATAMENTO DA ZONA MORTA --------
     if (abs(pos_error) <= DEADZONE) {
-        if (abs(pos_error) <= (DEADZONE / 3.0)) {
-            yaw_output = 0;
-            integral_error = 0;
-            adjust_needed = false; 
-            digitalWrite(LED_PIN, HIGH);
-        } else if (adjust_needed) { 
-            yaw_output = (pos_error > 0 ? 1 : -1) * ESC_MIN_POWER / 2;
-
-            if (millis() - last_blink >= 300) {
-                led_state = !led_state;
-                digitalWrite(LED_PIN, led_state ? HIGH : LOW);
-                last_blink = millis();
-            }
-        }
+        // Chegou no alvo (dentro da tolerância): desliga os motores
+        yaw_output = 0;
+        integral_error = 0;          // Zera a integral para não acumular erro parado
+        digitalWrite(LED_PIN, HIGH); // Apaga o LED indicando estabilidade
     } else {
-        adjust_needed = true;
-        digitalWrite(LED_PIN, LOW);
+        // Fora do alvo: O valor de yaw_output calculado pelo PID será mantido
+        digitalWrite(LED_PIN, LOW);  // Acende o LED indicando que está em movimento
     }
 
-    if (yaw_output > 0 && yaw_output < ESC_MIN_POWER) yaw_output = ESC_MIN_POWER;
+
+
+    if (yaw_output > 0 && yaw_output < ESC_MIN_POWER) yaw_output = ESC_MIN_POWER;   
     if (yaw_output < 0 && yaw_output > -ESC_MIN_POWER) yaw_output = -ESC_MIN_POWER;
 
     // -------- ACIONAMENTO DOS MOTORES --------
@@ -309,8 +424,8 @@ void loop() {
     int tr = ESC_NEUTRAL;
 
     if (yaw_output != 0) {
-        bf = ESC_NEUTRAL + yaw_output;
-        as = ESC_NEUTRAL + yaw_output; 
+        bf = ESC_NEUTRAL - yaw_output;
+        as = ESC_NEUTRAL + yaw_output;
     }
 
     bf = constrain(bf, LIMIT_PWM_MIN, LIMIT_PWM_MAX);
@@ -324,14 +439,184 @@ void loop() {
     if (millis() - last_telemetry_time >= TELEMETRY_INTERVAL) {
         last_telemetry_time = millis();
 
-        String string_telemetria = String(yaw_gyro, 2) + "," + 
-                                   String(filtered_gyro_rate, 2) + "," + 
-                                   String(bf) + "," + 
+        String string_telemetria = String(yaw_gyro, 2) + "," +
+                                   String(filtered_gyro_rate, 2) + "," +
+                                   String(bf) + "," +
                                    String(as) + "," +
                                    String(pos_error, 2) + "," +
                                    String(yaw_output, 2);
 
-        Serial.println(string_telemetria);   
+        Serial.println(string_telemetria);  
         Serial2.println(string_telemetria);  
     }
+
+    // 1. Leitura contínua dos fins de curso mecânicos do L298N
+    bool bateuCima = (digitalRead(FIM_CURSO_CIMA) == HIGH);
+    bool bateuBaixo = (digitalRead(FIM_CURSO_BAIXO) == HIGH);
+   
+    // ============================================================
+    // LÓGICA DO FILTRO (DEBOUNCE) PARA O NOVO SENSOR ÓPTICO (OLHAL)
+    // ============================================================
+    int leituraCruaOlhal = digitalRead(SENSOR_OLHAL_D0);
+
+    if (leituraCruaOlhal != ultimoEstadoFisicoOlhal) {
+        ultimoTempoFiltro = millis();
+    }
+
+    if ((millis() - ultimoTempoFiltro) > tempoFiltro) {
+        if (leituraCruaOlhal != estadoEstavelOlhal) {
+            estadoEstavelOlhal = leituraCruaOlhal;
+
+            if (estadoEstavelOlhal == LOW) {
+                // Luz passando = LOW = Olhal detectado
+                Serial.println("olhal chegou ao mecanismo (Luz detectada)");
+                
+                // Opcional: printar o valor analógico do pino A0 para checar possíveis ruídos na lente do encoder
+                // int valorA0 = analogRead(SENSOR_OLHAL_A0); 
+                // Serial.print("Valor analogico atual: "); 
+                // Serial.println(valorA0);
+            } else {
+                // Luz não passando = HIGH = Sem olhal
+                Serial.println("olhal removido do mecanismo (Feixe bloqueado)");
+            }
+        }
+    }
+   
+    ultimoEstadoFisicoOlhal = leituraCruaOlhal;
+    // ============================================================
+
+    // 2. SEGURANÇA EM TEMPO REAL:
+    if (bateuCima && estadoMotor == 1) {
+        pararMotor();
+        Serial.println("[PARADA] Atingiu o topo! Bloqueado para subir, liberado para descer ('s').");
+    }
+   
+    if (bateuBaixo && estadoMotor == -1) {
+        pararMotor();
+        Serial.println("[PARADA] Atingiu a base! Bloqueado para descer, liberado para subir ('w').");
+    }
+
+    if (bateuCima || bateuBaixo) {
+        digitalWrite(LED_PIN, LOW);
+    } else {
+        digitalWrite(LED_PIN, HIGH);
+    }
+
+    // 3. PROCESSAMENTO DE COMANDOS SERIAL (LEITURA ÚNICA)
+    if (Serial.available() > 0) {
+        char cmd = Serial.read();
+
+        // --- COMANDOS DO MOTOR L298N ---
+        if (cmd == 'w' || cmd == 'W') {
+            if (!bateuCima) {
+                moverSubir();
+            } else {
+                Serial.println("[BLOQUEADO] Fim de curso superior ativo! So pode descer ('s').");
+            }
+        }
+        else if (cmd == 's' || cmd == 'S') {
+            if (!bateuBaixo) {
+                moverDescer();
+            } else {
+                Serial.println("[BLOQUEADO] Fim de curso inferior ativo! So pode subir ('w').");
+            }
+        }
+        else if (cmd == ' ' || cmd == 'x' || cmd == 'X') {
+            pararMotor();
+            Serial.println(">> Motor L298N: PARADO");
+        }
+
+        // --- COMANDOS DO MOTOR BTS7960 ---
+        else if (cmd == 'a' || cmd == 'A') {
+            girarSentidoA();
+        }
+        else if (cmd == 'd' || cmd == 'D') {
+            girarSentidoD();
+        }
+        else if (cmd == 'c' || cmd == 'C') {
+            pararBTS();
+        }
+
+        // --- COMANDO DO ENCODER AS5600 ---
+        else if (cmd == 'e' || cmd == 'E') {
+            lerEncoderAS5600();
+        }
+    }
 }
+
+//*/
+// #define BF_PIN PA0   // Frente
+// #define AS_PIN PA1   // Lados
+// #define TR_PIN PA6   // Traseira
+
+
+/*
+#include <Arduino.h> 
+#include <Servo.h> 
+// Definição dos Pinos
+#define BF_PIN PA0
+#define AS_PIN PA1
+#define TR_PIN PA6
+#define LED_PIN PC13 // Novo pino de sinalização visual
+
+Servo esc_bf; 
+Servo esc_as; 
+Servo esc_tr; 
+
+void setup() { 
+  Serial.begin(115200); 
+  
+  // Configura o pino do LED como saída
+  pinMode(LED_PIN, OUTPUT); 
+
+  // Anexa os ESCs aos pinos
+  esc_bf.attach(BF_PIN); 
+  esc_as.attach(AS_PIN); 
+  esc_tr.attach(TR_PIN); 
+
+  // 1. PASSO: Envia o sinal MÁXIMO (2000us) imediatamente ao ligar o Arduino
+  Serial.println("=== MODO DE CALIBRAÇÃO DE ESC ===");
+  Serial.println("Enviando sinal MAX (2000us).");
+  Serial.println("-> LIGUE A BATERIA DOS ESCs AGORA e aguarde os bips musicais!");
+  
+  esc_bf.writeMicroseconds(2000); 
+  esc_as.writeMicroseconds(2000); 
+  esc_tr.writeMicroseconds(2000); 
+
+  // Acende o LED e aguarda 5 segundos
+  digitalWrite(LED_PIN, HIGH); 
+  Serial.println("Aguardando 5 segundos (LED ACESO)...");
+  delay(5000); 
+
+  // 2. PASSO: Sinaliza a transição piscando o LED por 2 segundos
+  Serial.println("Sinalizando transição: Piscando LED por 2 segundos...");
+  // Um loop de 4 iterações com 500ms totais cada (250ms apagado + 250ms aceso) = 2 segundos totais
+  for(int i = 0; i < 4; i++) {
+    digitalWrite(LED_PIN, LOW);
+    delay(250);
+    digitalWrite(LED_PIN, HIGH);
+    delay(250);
+  }
+
+  // 3. PASSO: Baixa para o MÍNIMO (1000us) e apaga o LED
+  Serial.println("Enviando sinal MIN (1000us)... Aguarde os bips de confirmacao longos!");
+  
+  // Apaga o LED em definitivo sinalizando que o sinal baixou
+  digitalWrite(LED_PIN, LOW); 
+  
+  esc_bf.writeMicroseconds(1000); 
+  esc_as.writeMicroseconds(1000); 
+  esc_tr.writeMicroseconds(1000); 
+  
+  Serial.println("Calibracao finalizada com sucesso!");
+} 
+
+void loop() { 
+  // Mantém o sinal em 1000us (neutro/desligado) para segurança
+  // Não precisamos fazer nada no loop além de manter os motores desarmados
+  esc_bf.writeMicroseconds(1000); 
+  esc_as.writeMicroseconds(1000); 
+  esc_tr.writeMicroseconds(1000); 
+  delay(100);
+}
+*/
