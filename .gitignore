@@ -1,1 +1,8 @@
 .aider*
+.env
+node_modules/
+__pycache__/
+.venv/
+dist/
+.DS_Store
+Thumbs.db
