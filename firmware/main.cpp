@@ -2,8 +2,8 @@
 //  PROJETO ESFERA SUSPENSA — FIRMWARE STM32F4 (BLACK PILL)
 //
 //  Esfera de 12 kg suspensa por cabo (L variável ENTRE sessões, 0,5–6 m) sobre linhas de
-//  transmissão. 3 motores bidirecionais (ESCs F45A, PWM 1500 µs neutro, ±250 µs de clamp)
-//  com hélices tangentes a 120° controlam 3 GDL:
+//  transmissão. 3 motores bidirecionais (ESCs F45A, PWM 1500 µs neutro, faixa completa
+//  ±500 µs) com hélices tangentes a 120° controlam 3 GDL:
 //    - ANTI-BALANÇO (X/Y): PID de VELOCIDADE estimada v̂ = L·θ̇_mundo (amortecimento)
 //    - HEADING (yaw): cascata apontamento → perfil de taxa com frenagem → PI de taxa em µs
 //      O erro de apontamento vem da VISÃO (V,<bearing>,<D> pela Serial2: câmeras fixas
@@ -98,11 +98,13 @@ const float M_KG         = 12.0f;   // massa total [kg]
 const float R_P          = 0.70f;   // braço eixo central → propulsores [m]
 const float G_ACC        = 9.80665f;
 
-// PWM dos ESCs: neutro, clamp de segurança e reservas (compartilham o orçamento)
+// PWM dos ESCs: neutro e limites. Faixa COMPLETA do ESC (±500 µs, calibração
+// de faixa feita) — decisão de operação da equipe; verificar corrente/térmica
+// dos F45A na primeira sessão com autoridade alta.
 const int   ESC_NEUTRAL      = 1500;
-const int   PWM_LIMIT_US     = 250;   // 1500 ± 250
-const int   SWING_RESERVE_US = 240;   // reserva do anti-balanço
-const int   YAW_RESERVE_US   = 150;   // reserva do heading
+const int   PWM_LIMIT_US     = 500;   // 1500 ± 500 (faixa completa)
+const int   SWING_RESERVE_US = 490;   // reserva do anti-balanço
+const int   YAW_RESERVE_US   = 300;   // reserva do heading
 
 // Curva de empuxo PROVISÓRIA até o wizard calibrar por motor:
 //   F(u) = kf·(u−dz)²·sinal(u);  kf_fwd = F_MAX_500/(500−dz)²
@@ -151,8 +153,8 @@ struct ControllerGains {
 };
 
 ControllerGains ganhos = {
-  8.0f, 0.4f, 0.0f,
-  2.5f, 0.5f, 1.5f,
+  45.0f, 2.2f, 0.0f,
+  2.5f, 1.5f, 2.5f,
   900.0f, 2000.0f
 };
 

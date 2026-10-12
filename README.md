@@ -34,13 +34,13 @@ esfera real sobreposta na mesma tela.
 | Comprimento do cabo L | 1 m (0,5–6 m, **só entre sessões**) | `RopeParams.length`, `--length` | medido |
 | Torção do cabo | **0** (heading livre, por gyro) | `RopeParams` | conforme hardware |
 | Força por hélice @ ±500 µs | **18 N** (curva quadrática, ré 60%, dz 30 µs) | `ActuatorParams` | **PROVISÓRIO — wizard calibra por motor** |
-| Clamp de segurança PWM | **1500 ± 250 µs** | `ActuatorParams.pwm_limit_us` | definido |
+| Faixa de PWM | **1500 ± 500 µs (faixa completa do ESC)** | `ActuatorParams.pwm_limit_us` / `PWM_LIMIT_US` | decisão da equipe — **verificar corrente/térmica dos F45A na 1ª sessão** |
 | MPU6050 | topo da esfera, junto ao pino | firmware | inclinômetro quase ideal |
 
 **Autoridade resultante** (com os defaults provisórios): envelope de força
-≈ 5,4 N (0,046 g) e torque de heading ≈ 2,5 N·m — amortecimento de grandes
-amplitudes é **lento por física**; se a calibração medir menos que 18 N/hélice,
-os ganhos são revisitados.
+≈ 15,5 N (13% do peso) e torque de heading ≈ 25 N·m. A faixa completa foi
+liberada em substituição ao clamp conservador de ±250 µs (que deixava o
+envelope em 3,2 N — acomodação de perturbações demorava 15+ s; agora ~2,6 s).
 
 ## Interface de hardware (motores)
 
@@ -184,13 +184,14 @@ Loops de controle **desligados no boot** — 'y'/'p' ligam.
 8. **Yaw**: degraus ±15° (referência interna); com a visão, bearing da linha.
 9. **Saturação**: comando grande → PWM nos clamps 1250/1750, sem chatter.
 
-## Comportamento esperado (simulador, defaults provisórios)
+## Comportamento esperado (simulador, defaults provisórios, faixa completa do ESC)
 
 | Métrica | Valor |
 |---|---|
-| Acomodação de velocidade (15° + 0,3 m/s) | ~8,5 s |
-| Rajada de 10 N por 2 s | inclina ~8°, recupera |
-| Acomodação de degrau de heading | ~2,6–4 s, sobressinal ≤ 1,5° |
+| Acomodação de velocidade (15° + 0,3 m/s) | ~1,7 s |
+| Perturbação forte (20°/−10° + 0,5/−0,4 m/s) | ~2,7 s |
+| Rajada de 10 N por 2 s | inclina ~5°, recupera em ~17 s |
+| Acomodação de degrau de heading | ~1,8–2,7 s, sobressinal ≤ 1,2° |
 | Desvio de energia em oscilação livre (20°, 20 s) | < 0,5% (sem drift) |
 
 ## Pré-requisitos e instalação

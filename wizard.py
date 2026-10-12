@@ -48,6 +48,12 @@ from twin.simstm import SimSTM
 from twin.transport import SimTransport, Transport
 
 MASS_KG = 12.0
+# Níveis MODERADOS de propósito: pulsos maiores (~420 µs) deflectem a esfera
+# 9–15° durante a medição, saindo do regime de pequenos ângulos em que a
+# fórmula de identificação é válida (e pioram a extrapolação do sinusóide
+# residual). Como o modelo é quadrático, 3 pontos em níveis baixos
+# extrapolam exatamente para a faixa completa do ESC — e o SNR da telemetria
+# já é suficiente (resposta ~10–30 °/s vs ruído ~0,5 °/s).
 PULSE_LEVELS = (240, 170, 100)
 PULSE_MS = 600
 BASELINE_FRAMES = 12   # 0,48 s @ 25 Hz

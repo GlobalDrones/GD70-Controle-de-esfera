@@ -58,12 +58,17 @@ CALIB_VERSION = 1
 
 @dataclass(frozen=True)
 class ActuatorParams:
-    """Parâmetros do cluster (defaults do hardware; os por-motor vão em MotorCalib)."""
+    """Parâmetros do cluster (defaults do hardware; os por-motor vão em MotorCalib).
+
+    O clamp usa a faixa COMPLETA do ESC (±500 µs, calibração de faixa feita)
+    — decisão de operação da equipe. Verificar corrente/térmica na bancada na
+    primeira sessão com autoridade alta.
+    """
 
     pwm_neutral_us: float = 1500.0
-    pwm_limit_us: float = 250.0  # clamp de segurança: 1500 ± 250
-    swing_reserve_us: float = 240.0  # reserva de µs para o anti-balanço
-    yaw_reserve_us: float = 150.0  # reserva de µs para o heading
+    pwm_limit_us: float = 500.0  # faixa completa do ESC: 1500 ± 500
+    swing_reserve_us: float = 490.0  # reserva de µs para o anti-balanço
+    yaw_reserve_us: float = 300.0  # reserva de µs para o heading
     f_at_500us: float = 18.0  # N @ ±500 µs — PROVISÓRIO (wizard calibra)
     reverse_ratio: float = 0.60  # kf_rev/kf_fwd — PROVISÓRIO
     deadzone_us: float = 30.0  # zona morta do ESC — PROVISÓRIO

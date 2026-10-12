@@ -44,15 +44,16 @@ class ControllerGains:
     massa/inércia, escale junto (ver :func:`gains_for_inertia`).
     """
 
-    # Loops de velocidade (X e Y): dominante-P (amortecimento).
-    vel_kp: float = 8.0  # N por (m/s)
-    vel_ki: float = 0.4
+    # Loops de velocidade (X e Y): dominante-P (amortecimento). Sintonizados
+    # para a faixa completa do ESC (±500 µs, envelope ~15,5 N = 13% do peso).
+    vel_kp: float = 45.0  # N por (m/s)
+    vel_ki: float = 2.2
     vel_kd: float = 0.0
     # Heading em cascata: erro angular -> PERFIL de taxa (com frenagem
     # embutida) -> PI de taxa em µs por motor (domínio do firmware).
     head_angle_kp: float = 2.5  # (rad/s) por rad de erro angular
-    head_decel: float = 0.5  # rad/s², desaceleração do perfil (≤ autoridade)
-    head_rate_limit: float = 1.5  # rad/s, taxa máxima de curva
+    head_decel: float = 1.5  # rad/s², desaceleração do perfil (≤ autoridade)
+    head_rate_limit: float = 2.5  # rad/s, taxa máxima de curva
     head_rate_kp_us: float = 900.0  # µs por (rad/s)
     head_rate_ki_us: float = 2000.0  # µs por rad
 

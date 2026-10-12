@@ -170,7 +170,8 @@ class SimSTM:
         if c0 == "W" and piece.count(" ") == 2:
             m_s, us_s, ms_s = piece[1:].split(" ")
             m, us, ms = int(m_s), int(us_s), float(ms_s)
-            if 0 <= m < 3 and abs(us) <= 250 and 0 < ms <= 3000:
+            limit = self.cluster.params.pwm_limit_us
+            if 0 <= m < 3 and abs(us) <= limit and 0 < ms <= 3000:
                 self.controller.set_heading_enabled(False)
                 self.controller.set_xy_enabled(False)
                 self._wizard = {"motor": m, "us": float(us), "remaining": ms / 1000.0}

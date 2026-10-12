@@ -170,10 +170,10 @@ def test_thrust_to_pwm_mapping():
     u_rev = 30.0 + 70.0 / math.sqrt(0.6)
     assert pwm[1] == pytest.approx(1500.0 - u_rev)
     assert pwm[2] == pytest.approx(1500.0)
-    # acima do clamp: clipa em 1750/1250
+    # acima do clamp: clipa na faixa completa do ESC (2000/1000)
     pwm_clip = cluster.thrust_to_pwm_us(np.array([100.0, -100.0, 0.0]))
-    assert pwm_clip[0] == pytest.approx(1750.0)
-    assert pwm_clip[1] == pytest.approx(1250.0)
+    assert pwm_clip[0] == pytest.approx(2000.0)
+    assert pwm_clip[1] == pytest.approx(1000.0)
 
 
 def test_thrust_allocation_exact_region_matches_command():
@@ -199,11 +199,10 @@ def test_yaw_distribution_pure_torque():
 
 
 def test_thrust_allocation_saturates():
-    """Comando enorme: µs clipam no limite de segurança e a força fica no
-    envelope físico."""
+    """Comando enorme: µs clipam na faixa do ESC e a força fica no envelope."""
     cluster = ThrusterCluster(NO_LAG)
-    act = cluster.realize(np.array([50.0, 0.0, 0.0]), 200.0, heading=0.0, dt=DT)
-    assert np.all(np.abs(act.pwm_us - 1500.0) <= 250.0 + 1e-9)
+    act = cluster.realize(np.array([50.0, 0.0, 0.0]), 400.0, heading=0.0, dt=DT)
+    assert np.all(np.abs(act.pwm_us - 1500.0) <= cluster.params.pwm_limit_us + 1e-9)
     assert np.linalg.norm(act.force_world[:2]) <= cluster.max_net_force * 1.5
     assert act.torque_heading <= cluster.max_torque + 1e-9
 
@@ -350,7 +349,7 @@ def test_log_pwm_within_esc_range():
     plant, cluster, controller = build_system("nonlinear")
     log = run_simulation(scenario, plant, cluster, controller)
     assert log.pwm.shape == (len(log.t), 3)
-    assert np.all(log.pwm >= 1250.0 - 1e-9) and np.all(log.pwm <= 1750.0 + 1e-9)
+    assert np.all(log.pwm >= 1000.0 - 1e-9) and np.all(log.pwm <= 2000.0 + 1e-9)
     # controle ativo durante a rajada: PWM sai do neutro em algum momento
     assert np.max(np.abs(log.pwm - 1500.0)) > 1.0
     # força externa registrada nos instantes da rajada
