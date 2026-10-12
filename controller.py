@@ -138,6 +138,10 @@ class EsferaController:
         self._heading_setpoint = wrap_to_pi(self._heading_setpoint + error)
         self._vision_pointing_error = error
 
+    def clear_vision(self) -> None:
+        """Descarta o bearing da visão (timeout) — volta ao setpoint interno."""
+        self._vision_pointing_error = None
+
     @property
     def heading_setpoint(self) -> float:
         return self._heading_setpoint

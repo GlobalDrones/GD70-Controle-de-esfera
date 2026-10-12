@@ -8,197 +8,197 @@ de liberdade com 3 motores bidirecionais + hélices tangentes ao raio da
 esfera, fixos à esfera:
 
 - **Heading (ψ):** orientação da esfera em torno do eixo vertical, rastreando
-  uma direção desejada que pode ser atualizada em runtime;
+  uma direção desejada — no campo, o **cabo da linha de transmissão** visto
+  pelas câmeras (que olham para baixo, fixas ao sensor);
 - **X e Y (translação):** controle de velocidade com setpoint zero
   (amortecimento ativo) — a esfera pende próxima do vertical em repouso.
 
-A simulação é a base para um futuro **digital twin** rodando junto com o
-modelo real.
+A esfera será posicionada sobre linhas de transmissão: estabiliza o heading
+alinhado à linha, amortece o balanço, desce pela polia (L entre sessões) e
+pega a linha com a pinça. A visão estéreo (na Rasp) fornece o bearing do cabo
+e a distância D esfera↔cabo.
 
-## Parâmetros do hardware (valores atuais no código)
+**Três componentes em paridade total** (mesmo modelo de atuador, mesmos
+ganhos, mesmo protocolo): o simulador Python, o firmware do STM32 e o
+**digital twin** — a simulação rodando ao lado do hardware real, com a
+esfera real sobreposta na mesma tela.
+
+## Parâmetros do hardware
 
 | Parâmetro | Valor | Onde | Status |
 |---|---|---|---|
 | Massa total do corpo móvel | **12 kg** | `SphereParams.mass` | medido |
-| Comprimento da corda (pino → CG) | **1 m (variável)** — sobrescreva com `--length` | `RopeParams.length` | medido |
-| Tração máxima por hélice | **18 N** (reversível, ±) | `ActuatorParams.max_thrust` | aprox. |
-| Raio da esfera (= braço das hélices) | **0,35 m** | `SphereParams.radius` | medido |
-| Momento de inércia em ψ | (2/5)·m·r² = 0,588 kg·m² | `SphereParams.inertia_z` | estimativa a calibrar* |
-| Rigidez torcional da corda | 0,05 N·m/rad | `RopeParams.torsional_stiffness` | estimativa a calibrar |
-| Amortecimento torcional da corda | 0,01 N·m·s/rad | `RopeParams.torsional_damping` | estimativa a calibrar |
+| Raio da esfera | **0,60 m** | `SphereParams.radius` | conforme hardware |
+| Braço eixo→propulsores | **0,70 m** | `ActuatorParams.arm_radius` | conforme hardware |
+| Momento de inércia em ψ | (2/5)·m·r² = **1,728 kg·m²** | `SphereParams.inertia_z` | estimativa (`--inertia` medido rescala ganhos) |
+| Comprimento do cabo L | 1 m (0,5–6 m, **só entre sessões**) | `RopeParams.length`, `--length` | medido |
+| Torção do cabo | **0** (heading livre, por gyro) | `RopeParams` | conforme hardware |
+| Força por hélice @ ±500 µs | **18 N** (curva quadrática, ré 60%, dz 30 µs) | `ActuatorParams` | **PROVISÓRIO — wizard calibra por motor** |
+| Clamp de segurança PWM | **1500 ± 250 µs** | `ActuatorParams.pwm_limit_us` | definido |
+| MPU6050 | topo da esfera, junto ao pino | firmware | inclinômetro quase ideal |
 
-\* A estrutura que segura os motores está majoritariamente **acima do CG**
-(perto do eixo de rotação do heading) e os motores/hélices, no equador, são
-leves — logo não dominam `I_ψ`. A fórmula de esfera maciça é um chute de
-trabalho; ao medir o valor real (oscilação livre no heading), passe por
-`--inertia` — os ganhos do loop de taxa são rescalados automaticamente
-(regra kp/I, ver `gains_for_inertia`).
-
-**Autoridade de controle resultante:** envelope exato de força horizontal =
-1,5·f_max = 27 N ≈ 0,23 g — o controle amortece velocidades, mas em
-inclinações grandes (≳ 13°, onde m·g·sin θ ≳ 27 N) os atuadores saturam
-transitoriamente; o anti-windup cobre isso. Torque de heading máximo =
-3·R·f_max = 18,9 N·m.
+**Autoridade resultante** (com os defaults provisórios): envelope de força
+≈ 5,4 N (0,046 g) e torque de heading ≈ 2,5 N·m — amortecimento de grandes
+amplitudes é **lento por física**; se a calibração medir menos que 18 N/hélice,
+os ganhos são revisitados.
 
 ## Interface de hardware (motores)
 
-- Motores **a**, **b**, **c**, defasados de 120°; a hélice **a empurra no
-  sentido +X do sensor** (o sensor está montado no pino, no topo, e gira com
-  a esfera — o referencial do corpo na simulação É o referencial do sensor).
-- PWM bidirecional: **1500 µs = parado, 2000 µs = full speed em um sentido,
-  1000 µs = full speed no outro**. Conversão N → µs em
-  `ThrusterCluster.thrust_to_pwm_us` (linear, clipada em [1000, 2000]) — é a
-  mesma conversão que o digital twin usará no lado real. O PWM de cada ESC
-  aparece no painel de séries temporais, no HUD da animação e no
-  `SimulationLog.pwm`.
-- Alocação de força/torque: `f_i = (2/3)(t_i·F_b) + τ/(3R)`, com saturação
-  por hélice; força comandada no referencial do mundo é girada para o corpo
-  (que gira com o heading) — mesmo caminho de software do sistema real.
-
-## Modo interativo (tempo real)
-
-```bash
-python main.py --interactive                    # cenário default como estado inicial
-python main.py --interactive --scenario heading # outra condição inicial
-```
-
-Simulação ao vivo (dt = 0,01 s ritmado pelo relógio de parede) numa única
-janela, em zonas separadas:
-
-- **faixa de status** (topo): tempo, estado dos loops **XY** e **HEADING**
-  (verde = ligado, vermelho = desligado) e indicação de PAUSADO;
-- **cena 3D** (esquerda): corda, esfera, setas de empuxo por hélice, seta
-  verde = força externa; arraste com o mouse para girar a vista;
-- **painel 2×2** (direita): inclinação, velocidade, heading vs desejado e
-  **PWM dos ESCs em µs**;
-- **rodapé**: bloco CONTROLES (teclas) e bloco GANHOS (valores vigentes e
-  item sendo ajustado).
-
-| Tecla | Ação |
-|---|---|
-| setas | força externa contínua em ±X/±Y do mundo, enquanto seguras |
-| Q / E | torque externo contínuo ±0,05 N·m no heading |
-| 1 | liga/desliga **controle pendular (X/Y)** |
-| 2 | liga/desliga **controle de heading** |
-| Z / X | setpoint de heading −15° / +15° |
-| G | seleciona próximo item ajustável (força ext. → vel_kp → … → head_rate_ki) |
-| + / − | ajusta o item selecionado (passo = 10% do ganho default) |
-| R | reset à condição inicial do cenário (integrais zeradas) |
-| P | pausa / retoma |
-| Esc | sai |
-
-Desligar um loop zera o comando correspondente: com XY desligado a esfera
-pendula livremente enquanto o heading continua controlado (e vice-versa);
-com os dois desligados os ESCs ficam em 1500 µs. Ao religar, as integrais
-dos PIDs são zeradas para não injetar degrau acumulado.
-
-### Forças externas em cenários (rajadas)
-
-Cenários batch suportam rajadas reprodutíveis via `force_events` — tuplas
-`(t_início, t_fim, fx, fy)` em N no referencial do mundo, aplicadas
-**diretamente na planta** (o controlador só as sente pelo estado, como no
-sistema real):
-
-```bash
-python main.py --scenario gust   # rajadas de 20 N e −15/−10 N + mudança de heading
-```
-
-## Modelo físico
-
-**Planta não-linear (`SphericalPendulumPlant`)** — pêndulo esférico completo,
-válido para grandes ângulos. O centro de massa é integrado em coordenadas
-cartesianas com a restrição de corda rígida `|r| = L` imposta pelo método
-RATTLE (integrador simplético para sistemas com restrição): o erro de energia
-fica limitado (~0,1%) e não dissipa artificialmente — importante para não
-"ajudar" o controlador. O heading segue `I·ψ̈ = τ − k_t·ψ − b_t·ψ̇` (mola e
-amortecimento torcionais da corda, referenciados ao pino).
-
-**Planta linearizada (`LinearizedPendulumPlant`)** — para pequenos ângulos,
-dois pêndulos lineares desacoplados em X e Y (`ẍ = −(g/L)x + Fx/m`) + o mesmo
-heading. Serve para sintonia rápida dos controladores.
-
-**Controlador (`controller.py`)** — três loops independentes:
-
-- X e Y: PIDs sobre a velocidade (setpoint 0) com anti-windup por clamping;
-- Heading: cascata ângulo → taxa (limitada) → torque, com erro envolto em
-  [−π, π] e **feedforward** do torque torcional conhecido da corda.
-
-Os ganhos são sintonizados para os parâmetros padrão (12 kg, 0,048 kg·m²):
-a regra do rescale é manter kp/m e kp/I — ao mudar massa/inércia, escale os
-ganhos de força/torque proporcionalmente.
-
-### Hipóteses e limitações
-
-- A esfera é ponto material para a translação; o empuxo age no CG efetivo
-  (L mede pino → CG).
-- As hélices empurram sempre no plano horizontal do mundo (o efeito da
-  inclinação da esfera sobre a direção do empuxo é de 2ª ordem em θ e fica
-  para a próxima iteração do digital twin).
-- Sem arrasto aerodinâmico nem dinâmica de motor (atraso de 1ª ordem) —
-  pontos naturais de refinamento.
-- Corda sem massa e axialmente rígida.
-- O controle translacional zera **velocidade** (conforme requisito): a
-  posição final fica próxima do vertical, mas não exatamente nele (offset
-  típico < 1°) — a posição final depende da trajetória, não há servo de
-  posição.
+- Motores **a**, **b**, **c** = BF(PA0), AS(PA15), TR(PA1); o motor **a
+  empurra no +X do sensor** (verificado fisicamente), b/c a ±120°.
+- PWM bidirecional: **1500 µs = parado, 2000/1000 µs = full speed ±**.
+- Curva quadrática por motor com zona morta e eficiência de ré própria —
+  **nada assume que os 3 motores foram soldados/montados iguais**: o wizard
+  mede cada um e o firmware guarda calibração por motor em RAM (comando M).
 
 ## Estrutura
 
 ```
 simulation.py     plantas (não-linear RATTLE + linearizada) e parâmetros
-actuators.py      cluster de 3 hélices: rótulos a/b/c, alocação, PWM, saturação
+actuators.py      modelo POR MOTOR (curva, sinais, calibração JSON) + lag
 pid_controller.py PID com anti-windup, limite de saída e wrap angular
-controller.py     3 loops de controle + feedforward torcional + toggles
-scenarios.py      cenários (condição inicial, agenda de heading, rajadas)
+controller.py     cascata heading (perfil de frenagem, µs) + PID velocidade
+scenarios.py      cenários (condição inicial, heading, rajadas de força)
 main.py           CLI, loop de simulação, métricas, comparação de plantas
 interactive.py    modo interativo ao vivo (teclado, HUD, painel PWM, ganhos)
 animation.py      animação 3D + painel de séries temporais (batch)
-tests/            testes de sanidade física e de malha fechada
+firmware/main.cpp firmware STM32 v2 (controle em paridade com o twin)
+twin/             digital twin: protocolo, transportes, STM simulado, janela
+wizard.py         identificação por motor (pulsos → modelo calibrado)
+rasp/agent.py     agente da Rasp: Serial2 do STM ↔ TCP
+tests/            38 testes (física, atuadores, malha fechada, twin, wizard)
 ```
 
-## Pré-requisitos
-
-- Python 3.10+
-
-## Instalação
-
-```bash
-python -m venv .venv
-.venv\Scripts\activate        # Windows
-# source .venv/bin/activate   # Linux/Mac
-pip install -r requirements.txt
-```
-
-## Execução
+## Simulador e modo interativo
 
 ```bash
 python main.py                          # cenário padrão, animação 3D
-python main.py --interactive            # modo interativo ao vivo (teclado)
-python main.py --scenario heading       # sequência de mudanças de heading
-python main.py --scenario disturbance   # perturbação translacional forte
+python main.py --interactive            # simulação ao vivo pelo teclado
 python main.py --scenario gust          # rajadas de força externa
-python main.py --plant linear           # planta linearizada
-python main.py --compare                # linear vs não-linear (métricas + gráfico)
-python main.py --no-anim                # só console/métricas (rápido, p/ sintonia)
-python main.py --length 2.0             # corda de 2 m (L é variável)
-python main.py --mass 12 --thrust 18    # sobrescrever massa/tração
-python main.py --inertia 0.4            # I_ψ medido (ganhos rescalados sozinhos)
-python main.py --save out/anim.gif      # exporta a animação em GIF
+python main.py --compare                # linear vs não-linear
+python main.py --calib calib.json       # usar calibração medida do wizard
+python main.py --length 2.5 --inertia 1.4   # parâmetros da sessão
+python -m pytest tests/ -q              # testes
 ```
 
-Testes:
+Teclas do interativo: setas = força externa · Q/E = torque · 1/2 =
+liga/desliga XY/heading · Z/X = ψ desejado · G, +/− = ganhos ao vivo ·
+R/P/Esc = reset/pausa/sair.
+
+## Digital Twin
 
 ```bash
-python -m pytest tests/ -q
+python -m twin --sim                # contra o STM SIMULADO (testar sem hardware)
+python -m twin --serial COM7        # STM plugado no USB do PC
+python -m twin --tcp 192.168.0.50   # via agente na Rasp (porta 9999)
 ```
 
-## Comportamento esperado (parâmetros padrão: 12 kg, r = 0,35 m, L = 1 m, 18 N/hélice)
+A janela do twin adiciona à simulação: **esfera fantasma** (estado real:
+inclinação, heading, empuxos dos PWMs medidos), **linha de transmissão a
+distância D** abaixo da esfera (quando a visão enviar), **curvas real vs
+simulada** (inclinação, velocidade, heading, PWM) e HUD do lado real com
+conexão e estado dos loops. Os comandos vão aos dois lados: 1/2 (loops),
+Z/X (heading), K (parada geral) e +/− (ganhos, com push ao STM via G).
+
+### Arquitetura
+
+```
+STM32 (firmware/main.cpp)
+  ├── USB ──────────────── PC (twin --serial)
+  └── Serial2 → Rasp (rasp/agent.py) → TCP 9999 → PC (twin --tcp)
+                                              ↘ wizard --tcp
+```
+
+Sem decidir ainda a rede? O transporte é plugável: `--serial` funciona em
+bancada sem rede nenhuma; `--tcp` quando o PC alcança a Rasp por IP (ou via
+túnel `ssh -L 9999:localhost:9999 pi@<rasp>`).
+
+### Agente na Rasp (deploy)
+
+```bash
+scp -r rasp/ pi@<rasp>:esfera/
+ssh pi@<rasp> 'sudo cp esfera/esfera-agent.service /etc/systemd/system/ &&
+              sudo systemctl enable --now esfera-agent'
+```
+
+(requer `pip3 install pyserial` na Rasp; ver cabeçalho de `rasp/agent.py`)
+
+### Contrato da visão (quando as câmeras existirem)
+
+A Rasp envia ao STM (e o STM aceita pela Serial2): `V<bearing_graus> <D_m>`
+— bearing do cabo da linha **no referencial da câmera/corpo** (câmeras fixas
+ao gyro: o bearing É o erro de apontamento, imune à deriva do gyro) e a
+distância estereoscópica ao cabo. O STM usa o bearing como erro direto
+enquanto fresco (< 500 ms) e o D vai à telemetria.
+
+## Wizard de identificação por motor
+
+```bash
+python wizard.py --sim            # valida contra o STM simulado
+python wizard.py --serial COM7    # bancada: esfera pendurada e LIVRE
+python wizard.py --tcp <rasp> --push
+```
+
+Pulsa cada motor em ±100/170/240 µs (600 ms, loops desligados), mede a
+resposta pela própria telemetria e devolve **por motor**: direção de empuxo
+(com transporte por amostra para o corpo — o pulso gira a esfera), sinal de
+yaw, curva µs→N frente/ré e zona morta (com correção analítica do atraso do
+atuador e subtração do sinusóide de oscilação residual). Saída: `calib.json`
+(mesmo formato do simulador) e push opcional ao STM.
+
+## Firmware (firmware/main.cpp)
+
+Correções vs. firmware anterior: (1) `pos_error` nunca era calculado — PID de
+yaw morto; (2) força anti-balanço sem rotação mundo→corpo; (3) taxas no corpo
+vs ângulos em mundo; (4) deadzone na integração do yaw; (5) sem gate
+gravimétrico no acc; (6) calibração sem verificação de quietude; (7) atuador
+global → por motor; (8) I2C 100→400 kHz; (9) parser duplicado → unificado.
+
+Comandos (USB e Serial2): `w/s/x` pinça · `a/d/c` polia · `e` AS5600 ·
+`m` teste de motores · `y` yaw on/off · `p|b` anti-balanço on/off · `k`
+**parada geral** · `z` calibra MPU (com gate de quietude) · `t` calibra L
+pelo período · `0` zera yaw desejado · `L<val>` comprimento · `<num>` degrau
+relativo de yaw · `G<idx> <val>` ganho · `R` lê ganhos · `V<b> <D>` visão ·
+`W<m> <us> <ms>` pulso do wizard · `M<m> ...` calibração por motor.
+Telemetria 25 Hz: `TEL,t,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,b,c,L,D,flags`.
+
+Loops de controle **desligados no boot** — 'y'/'p' ligam.
+
+## Checklist de bancada (primeira sessão com o twin)
+
+1. **Flash + smoke test**: boot com loops OFF; 'm' (teste de motores) —
+   confirmar a↔PA0/b↔PA15/c↔PA1 e os sentidos.
+2. **Eixos do MPU**: inclinar a esfera em direção conhecida → sinais de
+   sx/sy na telemetria (TEL); girar a esfera inclinada à mão → sx/sy NÃO
+   podem girar junto (senão, inverter `COMP_YAW_SIGN` no firmware).
+3. **ESCs**: modo bidirecional 1500 neutro confirmado (calibração de faixa
+   já feita); testar refresh > 50 Hz no futuro (reduz o atraso).
+4. **Wizard** (`python wizard.py --serial COM7 --push`): substitui TODOS os
+   chutes de atuador; conferir o relatório contra o esperado (~18 N/hélice).
+5. **'z'** (calibração com quietude) e **'t'** (período→L, cruzar com o L da
+   sessão).
+6. **Telemetria + fantasma**: anti-balanço OFF, empurrar a esfera — o
+   fantasma do twin deve rastrear (valida fusão + telemetria).
+7. **Anti-balanço ON** com ganhos conservadores (defaults): confirmar a
+   DIREÇÃO do amortecimento; subir ganhos ao vivo pelo twin.
+8. **Yaw**: degraus ±15° (referência interna); com a visão, bearing da linha.
+9. **Saturação**: comando grande → PWM nos clamps 1250/1750, sem chatter.
+
+## Comportamento esperado (simulador, defaults provisórios)
 
 | Métrica | Valor |
 |---|---|
-| Acomodação de velocidade (15° + 0,3 m/s iniciais) | ~1,2 s |
-| Acomodação de cada degrau de heading (90°, −45°, 180°) | ~1,7–2,0 s |
-| Sobressinal de heading | ~0° |
-| Rajada de 20 N por 2 s | inclina ~10°, recupera em ~1 s |
-| Perturbação forte (20° + 0,64 m/s) | ~2,1 s (satura transitoriamente) |
+| Acomodação de velocidade (15° + 0,3 m/s) | ~8,5 s |
+| Rajada de 10 N por 2 s | inclina ~8°, recupera |
+| Acomodação de degrau de heading | ~2,6–4 s, sobressinal ≤ 1,5° |
 | Desvio de energia em oscilação livre (20°, 20 s) | < 0,5% (sem drift) |
+
+## Pré-requisitos e instalação
+
+```bash
+python -m venv .venv && .venv\Scripts\activate   # Windows
+pip install -r requirements.txt
+```
+
+Python 3.10+. Para o firmware: Arduino CLI/IDE com suporte STM32
+(STM32Duino/Arduino_Core_STM32), placa Black Pill F401/F411.

@@ -287,6 +287,7 @@ class InteractiveWindow:
         ax_status = fig.add_subplot(gs[0, :])
         ax_status.axis("off")
         ax3d = fig.add_subplot(gs[1, 0], projection="3d")
+        self.ax3d = ax3d
         panel = gs[1, 1].subgridspec(2, 2)
         ax_tilt = fig.add_subplot(panel[0, 0])
         ax_v = fig.add_subplot(panel[0, 1])
