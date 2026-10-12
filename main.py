@@ -8,6 +8,8 @@ Uso:
     python main.py --compare                # linear vs não-linear (gráficos + métricas)
     python main.py --no-anim                # só console (rápido, para sintonia)
     python main.py --save animacao.gif      # exporta a animação em GIF
+    python main.py --interactive            # modo interativo ao vivo (teclado)
+    python main.py --calib calib.json       # calibração por motor (saída do wizard)
 """
 
 from __future__ import annotations
@@ -54,12 +56,12 @@ class SimulationLog:
     psi_des: np.ndarray  # setpoint de heading vigente (rad)
     cmd_fx: np.ndarray  # força desejada pelo controlador (N)
     cmd_fy: np.ndarray
-    cmd_torque: np.ndarray  # torque desejado (N m)
+    cmd_yaw_us: np.ndarray  # yaw desejado (µs por motor)
     act_fx: np.ndarray  # força realizada pelos atuadores (N)
     act_fy: np.ndarray
-    act_torque: np.ndarray
+    act_torque: np.ndarray  # torque de heading realizado (N m)
     thrusts: np.ndarray  # (n, 3), empuxo de cada hélice (N)
-    pwm: np.ndarray  # (n, 3), PWM enviado aos ESCs a/b/c (us)
+    pwm: np.ndarray  # (n, 3), PWM efetivo dos ESCs a/b/c (µs)
     ext_fx: np.ndarray  # força externa aplicada à planta (N)
     ext_fy: np.ndarray
 
@@ -72,26 +74,36 @@ class SimulationLog:
         return np.degrees(np.sqrt(self.tilt_x**2 + self.tilt_y**2))
 
 
-def build_system(plant_kind: str, mass=None, length=None, max_thrust=None, inertia=None):
+def build_system(
+    plant_kind: str,
+    mass=None,
+    length=None,
+    thrust=None,
+    inertia=None,
+    calib=None,
+):
     """Cria planta + atuadores + controlador.
 
     Os parâmetros físicos podem ser sobrescritos (flags CLI); os não
     informados usam os defaults do hardware em ``SphereParams``,
-    ``RopeParams`` e ``ActuatorParams``. Os ganhos do loop de taxa do
-    heading são rescalados automaticamente pela inércia efetiva (regra
-    kp/I, ver ``gains_for_inertia``) — ``--inertia`` com o valor medido no
-    hardware mantém a resposta consistente.
+    ``RopeParams`` e ``ActuatorParams``. ``calib`` (JSON do wizard) substitui
+    o modelo por-motor inteiro. Os ganhos do loop de taxa do heading são
+    rescalados automaticamente pela inércia efetiva (regra kp·k_u/I, ver
+    ``gains_for_inertia``).
     """
     sphere_kwargs = {"mass": mass} if mass is not None else {}
     if inertia is not None:
         sphere_kwargs["inertia_z"] = inertia
     rope_kwargs = {"length": length} if length is not None else {}
-    act_kwargs = {"max_thrust": max_thrust} if max_thrust is not None else {}
+    act_kwargs = {"f_at_500us": thrust} if thrust is not None else {}
 
     sphere = SphereParams(**sphere_kwargs)
     rope = RopeParams(**rope_kwargs)
     plant = PLANTS[plant_kind](sphere, rope)
-    cluster = ThrusterCluster(ActuatorParams(**act_kwargs), sphere.radius)
+    if calib is not None:
+        cluster = ThrusterCluster.from_calibration(calib)
+    else:
+        cluster = ThrusterCluster(ActuatorParams(**act_kwargs))
     controller = EsferaController(
         cluster,
         gains=gains_for_inertia(sphere.inertia_z),
@@ -120,6 +132,7 @@ def run_simulation(
     plant.reset(
         plant.initial_state(*tilt0, ic.velocity, math.radians(ic.heading_deg))
     )
+    cluster.reset()  # zera o estado do lag de atuação
 
     schedule = sorted(scenario.heading_schedule_deg)
     schedule_idx = 0
@@ -135,7 +148,9 @@ def run_simulation(
 
         state = plant.read_state()
         cmd = controller.update(state, scenario.dt)
-        act = cluster.realize(cmd.force_world, cmd.torque_heading, state.heading)
+        act = cluster.realize(
+            cmd.force_world, cmd.yaw_us, state.heading, scenario.dt
+        )
         # Forças externas agem na PLANTA (vento/empurrão); o controlador só
         # as percebe pelo estado medido — mesma malha do sistema real.
         ext_fx, ext_fy = external_force_at(t, scenario.force_events)
@@ -160,17 +175,16 @@ def run_simulation(
         records["psi_des"].append(cmd.heading_setpoint)
         records["cmd_fx"].append(cmd.force_world[0])
         records["cmd_fy"].append(cmd.force_world[1])
-        records["cmd_torque"].append(cmd.torque_heading)
+        records["cmd_yaw_us"].append(cmd.yaw_us)
         records["act_fx"].append(act.force_world[0])
         records["act_fy"].append(act.force_world[1])
         records["act_torque"].append(act.torque_heading)
         records["thrusts"].append(act.thrusts.copy())
+        records["pwm"].append(act.pwm_us.copy())
         records["ext_fx"].append(ext_fx)
         records["ext_fy"].append(ext_fy)
 
     arrays = {name: np.asarray(values) for name, values in records.items()}
-    # PWM enviado aos ESCs: função linear do empuxo (1500 us = parado).
-    arrays["pwm"] = cluster.thrust_to_pwm_us(arrays["thrusts"])
     return SimulationLog(**arrays)
 
 
@@ -187,6 +201,7 @@ def compute_metrics(log: SimulationLog, scenario: Scenario) -> Dict[str, object]
     metrics = {
         "velocidade máx. (m/s)": float(log.speed.max()),
         "inclinação máx. (°)": float(log.tilt_mag_deg.max()),
+        "PWM máx. desvio (µs)": float(np.max(np.abs(log.pwm - 1500.0))),
     }
     t_settle = _settle_time(log.t, log.speed, VELOCITY_TOLERANCE)
     metrics["acomodação de velocidade (s)"] = (
@@ -200,8 +215,7 @@ def compute_metrics(log: SimulationLog, scenario: Scenario) -> Dict[str, object]
             continue
         err_deg = np.degrees(wrap_to_pi(log.heading[mask] - log.psi_des[mask]))
         # Sobressinal consciente da direção: o degrau pode ser dado no sentido
-        # curto do wrap (erro inicial de até ±180°); excede o setpoint quando
-        # o erro cruza o zero em módulo além do inicial.
+        # curto do wrap; excede o setpoint quando o erro cruza o zero.
         initial_sign = np.sign(err_deg[0]) or 1.0
         beyond = err_deg[initial_sign * err_deg < 0]
         overshoot = float(np.max(np.abs(beyond))) if beyond.size else 0.0
@@ -257,8 +271,9 @@ def main(argv=None) -> None:
     parser.add_argument("--plant", default="nonlinear", choices=sorted(PLANTS))
     parser.add_argument("--mass", type=float, default=None, help="massa total do corpo móvel em kg (default 12)")
     parser.add_argument("--length", type=float, default=None, help="comprimento da corda pino->CG em m (default 1)")
-    parser.add_argument("--thrust", type=float, default=None, help="tração máxima por hélice em N (default 18)")
-    parser.add_argument("--inertia", type=float, default=None, help="momento de inércia do heading em kg m^2 (default (2/5)mr^2 = 0.588; ganhos rescalados automaticamente)")
+    parser.add_argument("--thrust", type=float, default=None, help="força por hélice a 500 µs de excursão, em N (default 18, provisório)")
+    parser.add_argument("--inertia", type=float, default=None, help="momento de inércia do heading em kg·m² (default 1,728; ganhos rescalados automaticamente)")
+    parser.add_argument("--calib", default=None, help="arquivo JSON de calibração por motor (saída do wizard)")
     parser.add_argument("--interactive", action="store_true", help="modo interativo ao vivo: forças externas, toggles e ganhos pelo teclado")
     parser.add_argument("--compare", action="store_true", help="roda linear e não-linear com os mesmos ganhos")
     parser.add_argument("--no-anim", action="store_true", help="sem janelas de visualização")
@@ -270,10 +285,10 @@ def main(argv=None) -> None:
     overrides = {
         "massa": args.mass,
         "comprimento": args.length,
-        "tração/hélice": args.thrust,
+        "força@500µs/hélice": args.thrust,
     }
     used = {k: v for k, v in overrides.items() if v is not None}
-    defaults = {"massa": "12 kg", "comprimento": "1 m", "tração/hélice": "18 N"}
+    defaults = {"massa": "12 kg", "comprimento": "1 m", "força@500µs/hélice": "18 N"}
     shown = {k: f"{v:g}" for k, v in used.items()} or defaults
     print("Parâmetros: " + ", ".join(f"{k}={v}" for k, v in shown.items()))
 
@@ -282,8 +297,9 @@ def main(argv=None) -> None:
             plant_kind,
             mass=args.mass,
             length=args.length,
-            max_thrust=args.thrust,
+            thrust=args.thrust,
             inertia=args.inertia,
+            calib=args.calib,
         )
 
     if args.interactive:

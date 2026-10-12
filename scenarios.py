@@ -58,10 +58,10 @@ SCENARIOS = {
     ),
     "gust": Scenario(
         name="gust",
-        description="Rajadas de força externa (20 N em X, depois −15 N/−10 N diagonal); heading 45° em t=6 s.",
-        duration=24.0,
+        description="Rajadas de força externa (10 N em X, depois −8/−6 N diagonal); heading 45° em t=6 s.",
+        duration=40.0,
         initial=InitialCondition(),
         heading_schedule_deg=((6.0, 45.0),),
-        force_events=((4.0, 6.0, 20.0, 0.0), (12.0, 13.0, -15.0, -10.0)),
+        force_events=((4.0, 6.0, 10.0, 0.0), (15.0, 16.0, -8.0, -6.0)),
     ),
 }

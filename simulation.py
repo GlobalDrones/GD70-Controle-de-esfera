@@ -20,9 +20,13 @@ Hipóteses (detalhadas no README):
 - A esfera é um ponto material para a translação; o empuxo das hélices age no
   centro de massa.
 - O heading é um GDL separado: rotação em torno do eixo vertical que passa
-  pelo pino. A torção da corda exerce mola ``-k_t * psi`` e amortecimento
-  ``-b_t * psi_dot`` relativos ao pino (o pino não gira).
+  pelo pino. No hardware real o cabo não transmite torção de forma
+  significativa (heading medido por giroscópio) — os defaults têm
+  ``k_t = b_t = 0`` (integrador duplo livre); os parâmetros ficam para
+  experimentos.
 - Arrasto do ar e demais perdas: ignorados.
+- Pivô fixo por default; ``pivot_accel`` (aceleração do pivô no mundo)
+  permite simular suspensão por drone no futuro.
 """
 
 from __future__ import annotations
@@ -50,12 +54,12 @@ class SphereParams:
     """
 
     mass: float = 12.0  # kg
-    radius: float = 0.35  # m
+    radius: float = 0.60  # m (diâmetro 1,20 m — conforme o hardware real)
     # Momento de inércia em torno do eixo vertical (kg m^2). Se None, usa a
-    # estimativa de esfera maciça (2/5) m r^2. É uma ESTIMATIVA a calibrar
+    # estimativa de esfera maciça (2/5) m r^2 = 1,728. ESTIMATIVA a calibrar
     # por teste de oscilação livre no heading — a distribuição real (massa
     # concentrada perto do eixo acima do CG + motores leves no equador) pode
-    # ficar abaixo ou acima desse valor.
+    # ficar abaixo disso.
     inertia_z: Optional[float] = None
 
     def __post_init__(self) -> None:
@@ -70,12 +74,15 @@ class RopeParams:
     """Parâmetros da corda rígida (tratada como haste sem massa).
 
     ``length`` é a distância pino -> CG efetivo do corpo móvel; é variável
-    no sistema real (default 1 m) e pode ser sobrescrita via CLI/parâmetro.
+    no sistema real (0,5–6 m), mas **só muda entre sessões** — a polia não
+    opera com o controle ativo, sem transientes de L. Torção zero por
+    default: no hardware o heading é livre (giroscópio), o cabo não devolve
+    o heading ao zero.
     """
 
     length: float = 1.0  # m
-    torsional_stiffness: float = 0.05  # N m / rad (estimativa a calibrar)
-    torsional_damping: float = 0.01  # N m s / rad (estimativa a calibrar)
+    torsional_stiffness: float = 0.0  # N m / rad (0 = heading livre)
+    torsional_damping: float = 0.0  # N m s / rad
 
     def __post_init__(self) -> None:
         if self.length <= 0:
@@ -104,6 +111,9 @@ class PendulumPlant:
         self.rope = rope
         self.gravity = gravity
         self._g_vec = np.array([0.0, 0.0, -gravity])
+        # Aceleração do pivô no mundo (m/s^2) — perturbação para a fase drone
+        # (pivô fixo na bancada). Age como força inercial: a_ext = g - a_pivo.
+        self.pivot_accel = np.zeros(3)
         self._state = self._default_state()
 
     # -- interface -----------------------------------------------------------
@@ -213,7 +223,7 @@ class SphericalPendulumPlant(PendulumPlant):
 
     def step(self, force_world, torque_heading: float, dt: float) -> PlantState:
         force = np.asarray(force_world, dtype=float)
-        a_ext = self._g_vec + force / self.sphere.mass
+        a_ext = self._g_vec - self.pivot_accel + force / self.sphere.mass
         r1, v1 = self._rattle_step(a_ext, dt)
         self._state = PlantState(r1, v1, self._state.heading, self._state.heading_rate)
         self._step_heading(torque_heading, dt)
@@ -239,7 +249,8 @@ class LinearizedPendulumPlant(PendulumPlant):
 
     Cada eixo horizontal vira um pêndulo linear desacoplado:
 
-        x_ddot = -(g/L) x + Fx / m,   y_ddot = -(g/L) y + Fy / m
+        x_ddot = -(g/L) x + Fx / m - ax_pivo
+        y_ddot = -(g/L) y + Fy / m - ay_pivo
 
     com z fixo em -L. O heading segue a mesma dinâmica da planta não-linear.
     """
@@ -254,8 +265,8 @@ class LinearizedPendulumPlant(PendulumPlant):
         state = self._state
         omega_n_sq = self.gravity / self.rope.length
 
-        ax = -omega_n_sq * state.position[0] + force[0] / self.sphere.mass
-        ay = -omega_n_sq * state.position[1] + force[1] / self.sphere.mass
+        ax = -omega_n_sq * state.position[0] + force[0] / self.sphere.mass - self.pivot_accel[0]
+        ay = -omega_n_sq * state.position[1] + force[1] / self.sphere.mass - self.pivot_accel[1]
 
         vx = state.velocity[0] + ax * dt
         vy = state.velocity[1] + ay * dt

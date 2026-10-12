@@ -43,7 +43,7 @@ def run(
     stride = max(1, round((1.0 / 30.0) / dt))
     frame_idx = np.arange(0, len(log.t), stride)
     interval_ms = stride * dt * 1000.0
-    f_max = cluster.params.max_thrust
+    f_max = cluster.max_thrust
 
     # ------------------------------------------------------------------ cena 3D
     fig = plt.figure(title, figsize=(11, 7.5))

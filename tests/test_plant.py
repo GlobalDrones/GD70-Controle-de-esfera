@@ -1,15 +1,21 @@
-"""Testes de sanidade física e de alocação dos atuadores.
+"""Testes de sanidade física, atuadores por motor, controle e modo interativo.
 
 Rodar com:  python -m pytest tests/ -q
 """
 
 import math
+import os
 
 import matplotlib
 import numpy as np
 import pytest
 
-from actuators import ActuatorParams, ThrusterCluster
+from actuators import (
+    ActuatorParams,
+    MotorCalib,
+    ThrusterCluster,
+    default_motors,
+)
 from scenarios import SCENARIOS
 from simulation import (
     LinearizedPendulumPlant,
@@ -24,6 +30,9 @@ from main import build_system, run_simulation
 DT = 0.01
 G = 9.81
 
+# Cluster sem atraso de atuação (lag ~0) para testes de alocação exata.
+NO_LAG = ActuatorParams(lag_tau=1e-12)
+
 
 def free_swing(plant: SphericalPendulumPlant, tilt_deg: float, duration: float):
     """Oscilação livre a partir de uma inclinação inicial (sem atuadores)."""
@@ -34,6 +43,9 @@ def free_swing(plant: SphericalPendulumPlant, tilt_deg: float, duration: float):
     for _ in range(int(duration / DT)):
         states.append(plant.step(zero, 0.0, DT))
     return states
+
+
+# ------------------------------------------------------------- física pura
 
 
 def test_wrap_to_pi():
@@ -72,7 +84,7 @@ def test_pendulum_period_small_angle():
 
 
 def test_torsional_oscillator_conserves_energy():
-    rope = RopeParams(torsional_damping=0.0)
+    rope = RopeParams(torsional_stiffness=0.05, torsional_damping=0.0)
     plant = SphericalPendulumPlant(SphereParams(), rope)
     plant.reset(
         plant.initial_state(0.0, 0.0, (0, 0, 0), heading=0.0, heading_rate=1.0)
@@ -97,51 +109,264 @@ def test_linear_matches_nonlinear_at_small_angles():
     assert abs(sn.position[1] - sl.position[1]) < 0.02
 
 
-def test_thrust_allocation_is_exact_without_saturation():
-    cluster = ThrusterCluster(ActuatorParams(), sphere_radius=0.1)
-    rng = np.random.default_rng(42)
-    for _ in range(20):
-        heading = rng.uniform(-math.pi, math.pi)
-        force_des = np.append(rng.uniform(-1.0, 1.0, 2), 0.0)
-        torque_des = rng.uniform(-0.05, 0.05)
-        act = cluster.realize(force_des, torque_des, heading)
-        np.testing.assert_allclose(act.force_world, force_des, atol=1e-9)
-        assert act.torque_heading == pytest.approx(torque_des, abs=1e-9)
-        assert np.all(np.abs(act.thrusts) <= cluster.params.max_thrust)
+def test_pivot_accel_disturbs_plant():
+    """Aceleração do pivô (fase drone) age como força inercial na planta."""
+    fixed = SphericalPendulumPlant(SphereParams(), RopeParams())
+    moving = SphericalPendulumPlant(SphereParams(), RopeParams())
+    for p in (fixed, moving):
+        p.reset(p.initial_state(0, 0, (0, 0, 0), 0.0))
+    moving.pivot_accel = np.array([1.0, 0.0, 0.0])
+    for _ in range(50):
+        fixed.step(np.zeros(3), 0.0, DT)
+        moving.step(np.zeros(3), 0.0, DT)
+    assert fixed.read_state().position[0] == pytest.approx(0.0, abs=1e-9)
+    # a_pivo = +x equivale a gravidade "puxando" o pêndulo para -x
+    assert moving.read_state().position[0] < -1e-4
 
 
-def test_thrust_allocation_saturates():
-    cluster = ThrusterCluster(ActuatorParams(), sphere_radius=0.1)
-    act = cluster.realize(np.array([50.0, 0.0, 0.0]), 5.0, heading=0.0)
-    assert np.all(np.abs(act.thrusts) <= cluster.params.max_thrust + 1e-12)
-    # Sob saturação profunda a alocação desvia do comando (vazamento no
-    # espaço nulo, com torque espúrio), mas fica dentro do envelope físico:
-    # força <= 2 f_max e torque <= max_torque.
-    assert np.linalg.norm(act.force_world) <= 2.0 * cluster.params.max_thrust + 1e-9
-    assert abs(act.torque_heading) <= cluster.max_torque + 1e-9
+# ------------------------------------------------- atuadores (por motor)
+
+
+def test_motor_labels_and_geometry():
+    """Motor a empurra no +X do corpo; b e c a ±120° (geometria default)."""
+    cluster = ThrusterCluster()
+    assert cluster.LABELS == ("a", "b", "c")
+    np.testing.assert_allclose(cluster.T[:, 0], [1.0, 0.0], atol=1e-12)
+    for i in (1, 2):
+        cos_angle = float(cluster.T[:, 0] @ cluster.T[:, i])
+        assert cos_angle == pytest.approx(-0.5)  # 120° entre pares
+    np.testing.assert_allclose(
+        cluster.T.sum(axis=1), [0.0, 0.0], atol=1e-12
+    )  # distribuição de yaw não gera força líquida
+
+
+def test_thrust_curve_roundtrip():
+    """us_from_force e force_from_us são inversas exatas (acima da zona morta)."""
+    cluster = ThrusterCluster()
+    for u in (60.0, 120.0, 240.0, -60.0, -180.0):
+        f = cluster.force_from_us(np.full(3, u))
+        u_back = cluster.us_from_force(f)
+        np.testing.assert_allclose(u_back, u, rtol=1e-9)
+    for f in (0.5, 1.0, 3.0, -0.5, -2.0):
+        u = cluster.us_from_force(np.full(3, f))
+        f_back = cluster.force_from_us(u)
+        np.testing.assert_allclose(f_back, f, rtol=1e-9)
+    # dentro da zona morta / abaixo do limiar: força zero
+    assert cluster.force_from_us(np.full(3, 20.0)) == pytest.approx(0.0)
+    assert cluster.us_from_force(np.full(3, 0.005)) == pytest.approx(0.0)
+
+
+def test_thrust_to_pwm_mapping():
+    """Quadrática com zona morta e clamp de segurança ±250 µs; ré menos
+    eficiente (60%) pede mais µs para a mesma força."""
+    params = ActuatorParams(f_at_500us=18.0, deadzone_us=30.0, reverse_ratio=0.6)
+    cluster = ThrusterCluster(params)
+    kf = 18.0 / (500.0 - 30.0) ** 2
+    # força correspondente a +100 µs de offset -> 1600 µs (frente)
+    f100 = kf * (100.0 - 30.0) ** 2
+    pwm = cluster.thrust_to_pwm_us(np.array([f100, -f100, 0.0]))
+    assert pwm[0] == pytest.approx(1600.0)
+    # mesma força no reverso: sqrt(1/0.6) mais µs além da zona morta
+    u_rev = 30.0 + 70.0 / math.sqrt(0.6)
+    assert pwm[1] == pytest.approx(1500.0 - u_rev)
+    assert pwm[2] == pytest.approx(1500.0)
+    # acima do clamp: clipa em 1750/1250
+    pwm_clip = cluster.thrust_to_pwm_us(np.array([100.0, -100.0, 0.0]))
+    assert pwm_clip[0] == pytest.approx(1750.0)
+    assert pwm_clip[1] == pytest.approx(1250.0)
 
 
 def test_thrust_allocation_exact_region_matches_command():
-    """Dentro do envelope exato da alocação — (2/3)|t_i·F| + |tau|/(3R) <=
-    f_max para todo i — o wrench realizado é idêntico ao comandado, mesmo
-    combinando força e torque e girando o heading."""
-    cluster = ThrusterCluster(ActuatorParams(), sphere_radius=0.1)
+    """Dentro da reserva e sem yaw, a força realizada é a comandada, em
+    qualquer heading (a rotação mundo→corpo é interna e exata)."""
+    cluster = ThrusterCluster(NO_LAG)
     for heading in (0.0, 1.0, -2.5):
-        for force in (
-            np.array([1.0, 0.0, 0.0]),
-            np.array([0.7, 0.7, 0.0]),
-            np.array([2.5, 0.0, 0.0]),  # perto do envelope exato com tau = 0
-        ):
-            for torque in (0.0, 0.2, -0.3):
-                if np.max(np.abs((2 / 3) * (cluster.thrust_dirs_body[:2].T @ force[:2]))) + abs(
-                    torque
-                ) / (3 * cluster.arm_radius) > cluster.params.max_thrust:
-                    continue  # fora do envelope exato: saturação esperada
-                act = cluster.realize(force, torque, heading)
-                # realize() recebe/comanda no mundo; sem saturação devolve
-                # exatamente o wrench comandado, qualquer que seja o heading.
-                np.testing.assert_allclose(act.force_world, force, atol=1e-9)
-                assert act.torque_heading == pytest.approx(torque, abs=1e-9)
+        for force in (np.array([1.0, 0.0, 0.0]), np.array([0.7, 0.7, 0.0])):
+            act = cluster.realize(force, 0.0, heading, DT)
+            np.testing.assert_allclose(act.force_world, force, atol=1e-9)
+            assert np.all(np.abs(act.pwm_us - 1500.0) <= 250.0 + 1e-9)
+
+
+def test_yaw_distribution_pure_torque():
+    """Distribuição de yaw igual nos 3 motores: torque sem força líquida."""
+    cluster = ThrusterCluster(NO_LAG)
+    act = cluster.realize(np.zeros(3), 100.0, heading=0.7, dt=DT)
+    np.testing.assert_allclose(act.force_world[:2], 0.0, atol=1e-9)
+    assert act.torque_heading > 0.0
+    assert act.torque_heading == pytest.approx(
+        cluster.arm_radius * 3.0 * act.thrusts[0], rel=1e-6
+    )
+
+
+def test_thrust_allocation_saturates():
+    """Comando enorme: µs clipam no limite de segurança e a força fica no
+    envelope físico."""
+    cluster = ThrusterCluster(NO_LAG)
+    act = cluster.realize(np.array([50.0, 0.0, 0.0]), 200.0, heading=0.0, dt=DT)
+    assert np.all(np.abs(act.pwm_us - 1500.0) <= 250.0 + 1e-9)
+    assert np.linalg.norm(act.force_world[:2]) <= cluster.max_net_force * 1.5
+    assert act.torque_heading <= cluster.max_torque + 1e-9
+
+
+def test_actuator_lag_first_order():
+    """O lag de 1ª ordem suaviza o comando com constante de tempo tau."""
+    params = ActuatorParams(lag_tau=0.12)
+    cluster = ThrusterCluster(params)
+    # degrau de comando: após ~1 tau, ~63% do valor
+    u_target = 200.0
+    for _ in range(12):  # 0,12 s
+        act = cluster.command_raw(np.full(3, u_target), heading=0.0, dt=DT)
+    u_after = act.pwm_us[0] - 1500.0
+    assert 0.5 * u_target < u_after < 0.8 * u_target
+
+
+def test_calibration_roundtrip(tmp_path):
+    cluster = ThrusterCluster()
+    cluster.apply_motor_calib(
+        1,
+        MotorCalib(label="b", thrust_dir=(0.0, 1.0), yaw_sign=-1.0,
+                   kf_fwd=9e-5, kf_rev=5e-5, deadzone_us=25.0),
+    )
+    path = os.path.join(tmp_path, "calib.json")
+    cluster.save_calibration(path)
+    loaded = ThrusterCluster.from_calibration(path)
+    assert loaded.arm_radius == cluster.arm_radius
+    for m_orig, m_load in zip(cluster.motors, loaded.motors):
+        assert m_load.label == m_orig.label
+        np.testing.assert_allclose(m_load.thrust_dir, m_orig.thrust_dir)
+        assert m_load.yaw_sign == m_orig.yaw_sign
+        assert m_load.kf_fwd == m_orig.kf_fwd
+
+
+def test_inverted_motor_changes_response():
+    """Motor com calibração invertida (ESC/hélice) responde ao contrário —
+    base do wizard de identificação."""
+    normal = ThrusterCluster(NO_LAG)
+    inverted = ThrusterCluster(NO_LAG)
+    calib = MotorCalib(**{**normal.motors[0].to_dict(), "yaw_sign": -1.0})
+    inverted.apply_motor_calib(0, calib)
+    f = np.array([1.0, 0.0, 0.0])
+    act_n = normal.realize(f, 0.0, 0.0, DT)
+    act_i = inverted.realize(f, 0.0, 0.0, DT)
+    # mesmo comando de força: só o torque muda de sinal (distribuição de yaw)
+    act_yaw_n = normal.realize(np.zeros(3), 50.0, 0.0, DT)
+    act_yaw_i = inverted.realize(np.zeros(3), 50.0, 0.0, DT)
+    assert act_yaw_n.torque_heading > 0
+    assert act_yaw_i.torque_heading < act_yaw_n.torque_heading
+
+
+# ---------------------------------------------------------------- toggles
+
+
+def test_controller_toggle_xy_zeroes_force():
+    plant, cluster, controller = build_system("nonlinear")
+    plant.reset(plant.initial_state(math.radians(10.0), 0.0, (0.5, 0.0, 0.0), 0.0))
+    state = plant.read_state()
+    cmd = controller.update(state, DT)
+    assert abs(cmd.force_world[0]) > 0.0  # loop ativo reage à velocidade
+
+    controller.set_xy_enabled(False)
+    cmd = controller.update(state, DT)
+    np.testing.assert_allclose(cmd.force_world, 0.0)
+    # heading continua ativo
+    controller.set_heading(90.0)
+    cmd = controller.update(state, DT)
+    assert abs(cmd.yaw_us) > 0.0
+
+    controller.set_xy_enabled(True)  # religar reseta integrais, força volta
+    cmd = controller.update(state, DT)
+    assert abs(cmd.force_world[0]) > 0.0
+
+
+def test_controller_toggle_heading_zeroes_yaw():
+    plant, cluster, controller = build_system("nonlinear")
+    plant.reset(plant.initial_state(0, 0, (0, 0, 0), 0.0))
+    controller.set_heading(90.0)
+    state = plant.read_state()
+    cmd = controller.update(state, DT)
+    assert abs(cmd.yaw_us) > 0.0
+
+    controller.set_heading_enabled(False)
+    cmd = controller.update(state, DT)
+    assert cmd.yaw_us == 0.0
+    # XY continua ativo
+    plant.reset(plant.initial_state(0, 0, (0.3, 0.0, 0.0), 0.0))
+    state = plant.read_state()
+    cmd = controller.update(state, DT)
+    assert abs(cmd.force_world[0]) > 0.0
+
+
+def test_both_loops_off_means_idle_escs():
+    plant, cluster, controller = build_system("nonlinear")
+    controller.set_xy_enabled(False)
+    controller.set_heading_enabled(False)
+    plant.reset(plant.initial_state(math.radians(10.0), 0.0, (0.4, 0.2, 0.0), 0.5))
+    state = plant.read_state()
+    cmd = controller.update(state, DT)
+    np.testing.assert_allclose(cmd.force_world, 0.0)
+    assert cmd.yaw_us == 0.0
+    act = cluster.realize(cmd.force_world, cmd.yaw_us, state.heading, DT)
+    np.testing.assert_allclose(act.thrusts, 0.0, atol=1e-12)
+    np.testing.assert_allclose(act.pwm_us, 1500.0)
+
+
+def test_pointing_error_from_vision():
+    """Bearing da visão substitui o setpoint interno como erro direto."""
+    plant, cluster, controller = build_system("nonlinear")
+    plant.reset(plant.initial_state(0, 0, (0, 0, 0), 0.0))
+    controller.set_pointing_error(20.0)  # alvo 20° à frente do corpo
+    cmd = controller.update(plant.read_state(), DT)
+    assert cmd.yaw_us > 0.0
+
+
+def test_set_gains_updates_pids():
+    from controller import ControllerGains
+
+    _, _, controller = build_system("nonlinear")
+    new = ControllerGains(vel_kp=10.0, vel_ki=1.0, vel_kd=0.5)
+    controller.set_gains(new)
+    assert controller.pid_vx.kp == 10.0
+    assert controller.pid_vy.ki == 1.0
+    assert controller.pid_heading_rate.kp == new.head_rate_kp_us
+
+
+def test_gains_for_inertia_rescales_rate_loop():
+    from controller import REFERENCE_INERTIA_Z, ControllerGains, gains_for_inertia
+
+    default = ControllerGains()
+    doubled = gains_for_inertia(2.0 * REFERENCE_INERTIA_Z)
+    assert doubled.head_rate_kp_us == pytest.approx(2.0 * default.head_rate_kp_us)
+    assert doubled.head_rate_ki_us == pytest.approx(2.0 * default.head_rate_ki_us)
+    # ganhos cinemáticos e de translação inalterados
+    assert doubled.head_angle_kp == default.head_angle_kp
+    assert doubled.vel_kp == default.vel_kp
+
+
+# ------------------------------------------------- malha fechada (batch)
+
+
+def test_log_pwm_within_esc_range():
+    scenario = SCENARIOS["gust"]
+    plant, cluster, controller = build_system("nonlinear")
+    log = run_simulation(scenario, plant, cluster, controller)
+    assert log.pwm.shape == (len(log.t), 3)
+    assert np.all(log.pwm >= 1250.0 - 1e-9) and np.all(log.pwm <= 1750.0 + 1e-9)
+    # controle ativo durante a rajada: PWM sai do neutro em algum momento
+    assert np.max(np.abs(log.pwm - 1500.0)) > 1.0
+    # força externa registrada nos instantes da rajada
+    gust_mask = (log.t >= 4.0) & (log.t < 6.0)
+    assert np.allclose(log.ext_fx[gust_mask], 10.0)
+    assert np.allclose(log.ext_fx[log.t < 4.0], 0.0)
+
+
+def test_gust_scenario_stabilizes_after_disturbances():
+    scenario = SCENARIOS["gust"]
+    plant, cluster, controller = build_system("nonlinear")
+    log = run_simulation(scenario, plant, cluster, controller)
+    assert log.speed[-1] < 0.05
+    assert log.tilt_mag_deg[-1] < 2.0
+    final_err_deg = math.degrees(wrap_to_pi(log.heading[-1] - log.psi_des[-1]))
+    assert abs(final_err_deg) < 2.0
 
 
 def test_closed_loop_default_scenario_stabilizes():
@@ -162,151 +387,10 @@ def test_closed_loop_disturbance_damps_velocity():
     assert log.tilt_mag_deg[-1] < 2.0
 
 
-def test_motor_labels_and_geometry():
-    """Hélice 'a' empurra no +X do corpo (= +X do sensor); b e c a 120°."""
-    cluster = ThrusterCluster(ActuatorParams(), sphere_radius=0.1)
-    assert cluster.LABELS == ("a", "b", "c")
-    np.testing.assert_allclose(
-        cluster.thrust_dirs_body[:2, 0], [1.0, 0.0], atol=1e-12
-    )
-    for i in (1, 2):
-        cos_angle = float(
-            cluster.thrust_dirs_body[:2, 0] @ cluster.thrust_dirs_body[:2, i]
-        )
-        assert cos_angle == pytest.approx(math.cos(2.0 * math.pi / 3))
-    # torque consistente: empuxo positivo de 'a' gira +psi (braço R)
-    act = cluster.realize(np.zeros(3), 0.0, heading=0.0)
-    assert act.torque_heading == pytest.approx(0.0)
-
-
-def test_thrust_to_pwm_mapping():
-    """PWM bidirecional: 1500 us parado, 2000/1000 us full speed ±."""
-    cluster = ThrusterCluster(ActuatorParams(), sphere_radius=0.1)
-    f_max = cluster.params.max_thrust
-    pwm = cluster.thrust_to_pwm_us(np.array([0.0, f_max, -f_max]))
-    assert pwm[0] == pytest.approx(1500.0)
-    assert pwm[1] == pytest.approx(2000.0)
-    assert pwm[2] == pytest.approx(1000.0)
-    # linearidade: meia tração -> meio intervalo
-    pwm_half = cluster.thrust_to_pwm_us(np.array([f_max / 2.0, 0.0, 0.0]))
-    assert pwm_half[0] == pytest.approx(1750.0)
-    # clip fora da faixa
-    pwm_clip = cluster.thrust_to_pwm_us(np.array([3.0 * f_max, -3.0 * f_max, 0.0]))
-    assert pwm_clip[0] == pytest.approx(2000.0)
-    assert pwm_clip[1] == pytest.approx(1000.0)
-
-
 def test_closed_loop_heading_sequence_tracks_setpoint():
     scenario = SCENARIOS["heading"]
     plant, cluster, controller = build_system("linear")
     log = run_simulation(scenario, plant, cluster, controller)
-    final_err_deg = math.degrees(wrap_to_pi(log.heading[-1] - log.psi_des[-1]))
-    assert abs(final_err_deg) < 2.0
-
-
-# ------------------------------------------------------------------ toggles
-
-
-def test_controller_toggle_xy_zeroes_force():
-    plant, cluster, controller = build_system("nonlinear")
-    plant.reset(plant.initial_state(math.radians(10.0), 0.0, (0.5, 0.0, 0.0), 0.0))
-    state = plant.read_state()
-    cmd = controller.update(state, DT)
-    assert abs(cmd.force_world[0]) > 0.0  # loop ativo reage à velocidade
-
-    controller.set_xy_enabled(False)
-    cmd = controller.update(state, DT)
-    np.testing.assert_allclose(cmd.force_world, 0.0)
-    # heading continua ativo
-    controller.set_heading(90.0)
-    cmd = controller.update(state, DT)
-    assert abs(cmd.torque_heading) > 0.0
-
-    controller.set_xy_enabled(True)  # religar reseta integrais, força volta
-    cmd = controller.update(state, DT)
-    assert abs(cmd.force_world[0]) > 0.0
-
-
-def test_controller_toggle_heading_zeroes_torque():
-    plant, cluster, controller = build_system("nonlinear")
-    plant.reset(plant.initial_state(0, 0, (0, 0, 0), 0.0))
-    controller.set_heading(90.0)
-    state = plant.read_state()
-    cmd = controller.update(state, DT)
-    assert abs(cmd.torque_heading) > 0.0
-
-    controller.set_heading_enabled(False)
-    cmd = controller.update(state, DT)
-    assert cmd.torque_heading == 0.0
-    # XY continua ativo
-    plant.reset(plant.initial_state(0, 0, (0.3, 0.0, 0.0), 0.0))
-    state = plant.read_state()
-    cmd = controller.update(state, DT)
-    assert abs(cmd.force_world[0]) > 0.0
-
-
-def test_both_loops_off_means_idle_escs():
-    plant, cluster, controller = build_system("nonlinear")
-    controller.set_xy_enabled(False)
-    controller.set_heading_enabled(False)
-    plant.reset(plant.initial_state(math.radians(10.0), 0.0, (0.4, 0.2, 0.0), 0.5))
-    state = plant.read_state()
-    cmd = controller.update(state, DT)
-    np.testing.assert_allclose(cmd.force_world, 0.0)
-    assert cmd.torque_heading == 0.0
-    act = cluster.realize(cmd.force_world, cmd.torque_heading, state.heading)
-    np.testing.assert_allclose(act.thrusts, 0.0)
-    np.testing.assert_allclose(
-        cluster.thrust_to_pwm_us(act.thrusts), cluster.params.pwm_neutral_us
-    )
-
-
-def test_set_gains_updates_pids():
-    _, _, controller = build_system("nonlinear")
-    from controller import ControllerGains
-
-    new = ControllerGains(vel_kp=10.0, vel_ki=1.0, vel_kd=0.5)
-    controller.set_gains(new)
-    assert controller.pid_vx.kp == 10.0
-    assert controller.pid_vy.ki == 1.0
-    assert controller.pid_heading_rate.kd == new.head_rate_kd
-
-
-def test_gains_for_inertia_rescales_rate_loop():
-    from controller import REFERENCE_INERTIA_Z, ControllerGains, gains_for_inertia
-
-    default = ControllerGains()
-    doubled = gains_for_inertia(2.0 * REFERENCE_INERTIA_Z)
-    assert doubled.head_rate_kp == pytest.approx(2.0 * default.head_rate_kp)
-    assert doubled.head_rate_ki == pytest.approx(2.0 * default.head_rate_ki)
-    # ganhos cinemáticos e de translação inalterados
-    assert doubled.head_angle_kp == default.head_angle_kp
-    assert doubled.vel_kp == default.vel_kp
-
-
-# ------------------------------------------------------- PWM no log + rajadas
-
-
-def test_log_pwm_within_esc_range():
-    scenario = SCENARIOS["gust"]
-    plant, cluster, controller = build_system("nonlinear")
-    log = run_simulation(scenario, plant, cluster, controller)
-    assert log.pwm.shape == (len(log.t), 3)
-    assert np.all(log.pwm >= 1000.0 - 1e-9) and np.all(log.pwm <= 2000.0 + 1e-9)
-    # controle ativo durante a rajada: PWM sai do neutro em algum momento
-    assert np.max(np.abs(log.pwm - 1500.0)) > 1.0
-    # força externa registrada nos instantes da rajada
-    gust_mask = (log.t >= 4.0) & (log.t < 6.0)
-    assert np.allclose(log.ext_fx[gust_mask], 20.0)
-    assert np.allclose(log.ext_fx[log.t < 4.0], 0.0)
-
-
-def test_gust_scenario_stabilizes_after_disturbances():
-    scenario = SCENARIOS["gust"]
-    plant, cluster, controller = build_system("nonlinear")
-    log = run_simulation(scenario, plant, cluster, controller)
-    assert log.speed[-1] < 0.05
-    assert log.tilt_mag_deg[-1] < 2.0
     final_err_deg = math.degrees(wrap_to_pi(log.heading[-1] - log.psi_des[-1]))
     assert abs(final_err_deg) < 2.0
 
@@ -347,7 +431,7 @@ def test_live_session_toggle_and_reset():
     assert controller.heading_enabled is False
     for _ in range(50):
         session.step()
-    np.testing.assert_allclose(session.last_thrusts, 0.0)  # ESCs em 1500 us
+    np.testing.assert_allclose(session.last_thrusts, 0.0, atol=0.05)
 
     session.toggle_xy()
     session.toggle_heading()
@@ -417,8 +501,6 @@ def test_interactive_window_smoke_headless():
     win.fig.canvas.draw_idle = lambda: draw_calls.append(1)
     win.on_timer()
     assert len(draw_calls) >= 1
-
-    import os
 
     os.makedirs("out", exist_ok=True)
     win.fig.savefig("out/_interactive_smoke.png", dpi=72)

@@ -103,8 +103,8 @@ class LiveSession:
             ("vel_kd", lambda: self.controller.gains.vel_kd, self._gain_setter("vel_kd"), 0.1 * g.vel_kd),
             ("head_angle_kp", lambda: self.controller.gains.head_angle_kp, self._gain_setter("head_angle_kp"), 0.1 * g.head_angle_kp),
             ("head_rate_limit", lambda: self.controller.gains.head_rate_limit, self._gain_setter("head_rate_limit"), 0.1 * g.head_rate_limit),
-            ("head_rate_kp", lambda: self.controller.gains.head_rate_kp, self._gain_setter("head_rate_kp"), 0.1 * g.head_rate_kp),
-            ("head_rate_ki", lambda: self.controller.gains.head_rate_ki, self._gain_setter("head_rate_ki"), 0.1 * g.head_rate_ki),
+            ("head_rate_kp_us", lambda: self.controller.gains.head_rate_kp_us, self._gain_setter("head_rate_kp_us"), 0.1 * g.head_rate_kp_us),
+            ("head_rate_ki_us", lambda: self.controller.gains.head_rate_ki_us, self._gain_setter("head_rate_ki_us"), 0.1 * g.head_rate_ki_us),
         ]
         self.selected = 0
 
@@ -120,6 +120,7 @@ class LiveSession:
     def reset(self) -> None:
         """Volta à condição inicial e zera as integrais dos PIDs."""
         self.plant.reset(self._initial_state)
+        self.cluster.reset()
         self.controller.pid_vx.reset()
         self.controller.pid_vy.reset()
         self.controller.pid_heading_rate.reset()
@@ -151,7 +152,9 @@ class LiveSession:
         """Um passo de simulação (malha fechada + forças externas)."""
         state = self.plant.read_state()
         cmd = self.controller.update(state, self.dt)
-        act = self.cluster.realize(cmd.force_world, cmd.torque_heading, state.heading)
+        act = self.cluster.realize(
+            cmd.force_world, cmd.yaw_us, state.heading, self.dt
+        )
         f_ext = self.external_force()
         self.plant.step(
             act.force_world + f_ext,
@@ -262,7 +265,7 @@ class InteractiveWindow:
         dt = session.dt
         sphere_radius = self.plant.sphere.radius
         rope_length = self.plant.rope.length
-        f_max = self.cluster.params.max_thrust
+        f_max = self.cluster.max_thrust
         self.trail_samples = int(TRAIL_SECONDS / dt)
         self.accumulator = 0.0
         self.last_wall = time.perf_counter()
@@ -549,7 +552,7 @@ class InteractiveWindow:
             "GANHOS\n"
             f"  XY:  kp {g.vel_kp:6.2f}   ki {g.vel_ki:5.2f}   kd {g.vel_kd:5.2f}\n"
             f"  HEAD: ang {g.head_angle_kp:5.2f}   lim {g.head_rate_limit:5.2f}"
-            f"   kp {g.head_rate_kp:6.2f}   ki {g.head_rate_ki:5.2f}\n"
+            f"   kp_us {g.head_rate_kp_us:6.1f}   ki_us {g.head_rate_ki_us:6.1f}\n"
             f"AJUSTANDO → {label} = {getter():.3f}    (G troca · +/− ajusta)"
         )
 
