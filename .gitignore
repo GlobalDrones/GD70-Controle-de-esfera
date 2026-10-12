@@ -1,8 +1,10 @@
 .aider*
+.zcode/
 .env
 node_modules/
 __pycache__/
 .venv/
 dist/
+out/
 .DS_Store
 Thumbs.db
