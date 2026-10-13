@@ -54,26 +54,46 @@ class AsyncCamera:
 
         # Controle de reconexão
         self.reconnect_delay = 1.0
+        # Após N reconexões seguidas sem frames, o processo se reinicia
+        # (os.execv): reiniciar o programa é o que comprovadamente destrava.
+        self.max_failed_reconnects = 3
+        self._failed_reconnects = 0
 
     def _open_camera(self):
         print(f"[INFO] Conectando {self.name}...")
 
-        cap = cv2.VideoCapture(self.src)
+        # Dispositivo local (/dev/...) -> V4L2 direto. Sem backend explícito o
+        # OpenCV tenta o GStreamer primeiro, que sempre falha aqui.
+        is_local = isinstance(self.src, int) or str(self.src).startswith("/dev/")
+        backend = cv2.CAP_V4L2 if is_local else cv2.CAP_ANY
+        cap = cv2.VideoCapture(self.src, backend)
 
         if not cap.isOpened():
             cap.release()
             print(f"[ERRO] Nao abriu {self.src}")
             return False
 
+        if is_local:
+            # MJPG antes da resolução: sem isso o driver escolhe YUYV sem
+            # compressão (1280x720 @ 10 fps, ~18 MB/s por câmera), que satura
+            # o USB 2.0 com duas câmeras e acaba travando o stream.
+            cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
         cap.set(cv2.CAP_PROP_FRAME_WIDTH, self.width)
         cap.set(cv2.CAP_PROP_FRAME_HEIGHT, self.height)
         cap.set(cv2.CAP_PROP_BUFFERSIZE, 1)
 
-        # Descarta alguns frames iniciais
+        # Descarta alguns frames iniciais e garante que o stream entrega imagem
+        got_frame = False
         for _ in range(5):
             ret, frame = cap.read()
             if not ret:
                 break
+            got_frame = True
+
+        if not got_frame:
+            cap.release()
+            print(f"[ERRO] {self.name} abriu mas nao entregou frames")
+            return False
 
         self._cap = cap
 
@@ -117,6 +137,9 @@ class AsyncCamera:
                 if self._open_camera():
                     print(f"[OK] {self.name} reconectada!")
                 else:
+                    self._failed_reconnects += 1
+                    if self._failed_reconnects >= self.max_failed_reconnects:
+                        self._restart_process()
                     time.sleep(self.reconnect_delay)
 
                 continue
@@ -130,6 +153,7 @@ class AsyncCamera:
 
                 with self.lock:
                     self.frame = frame
+                self._failed_reconnects = 0
 
             else:
 
@@ -148,6 +172,16 @@ class AsyncCamera:
                     self.frame = None
 
                 time.sleep(self.reconnect_delay)
+
+    def _restart_process(self):
+        print(f"[ERRO] {self.name} travada apos {self._failed_reconnects} "
+              f"reconexoes. Reiniciando o processo...", flush=True)
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
 
     def read(self):
         with self.lock:

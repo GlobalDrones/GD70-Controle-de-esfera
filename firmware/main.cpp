@@ -881,7 +881,10 @@ void comando_linha(const String &cmd) {
 
 // Parser não bloqueante: chars da whitelist executam imediatamente (comportamento
 // original); o resto acumula em linha até \n. MESMA lógica nas duas portas.
-const char WHITELIST[] = "wWsSxX aAdDcCeEmYyBbPpKkZzTt0";
+// 'W' maiúsculo NÃO entra: é o prefixo do pulso do wizard (W<motor> <us> <ms>);
+// se fosse imediato, "W0 240 600" acionaria a pinça (moverSubir) e o resto
+// ("0 240 600") viraria setpoint de yaw — o pulso nunca chegava aos ESCs.
+const char WHITELIST[] = "wsSxX aAdDcCeEmYyBbPpKkZzTt0";
 bool eh_comando_imediato(char c) {
   for (const char *p = WHITELIST; *p; p++) {
     if (*p == ' ') continue;
