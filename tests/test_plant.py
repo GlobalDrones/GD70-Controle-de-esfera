@@ -171,7 +171,7 @@ def test_command_floor_avoids_latch_band():
 
 
 def test_thrust_to_pwm_mapping():
-    """Quadrática com zona morta e clamp de segurança ±250 µs; ré menos
+    """Quadrática com zona morta e clamp de segurança ±500 µs; ré menos
     eficiente (60%) pede mais µs para a mesma força."""
     params = ActuatorParams(f_at_500us=18.0, deadzone_us=30.0, reverse_ratio=0.6)
     cluster = ThrusterCluster(params)

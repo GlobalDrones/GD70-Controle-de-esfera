@@ -34,7 +34,7 @@ Realização (espelha o firmware):
 4. conversão N → µs por motor (curva + zona morta próprias);
 5. distribuição de yaw: ``u_i += yaw_sign_i · yaw_us`` (yaw_us = µs por
    motor, sinal do controlador);
-6. clamp de segurança ±250 µs e **atraso de atuação de 1ª ordem** (~120 ms,
+6. clamp de segurança ±500 µs e **atraso de atuação de 1ª ordem** (~120 ms,
    spin-up de ESC+hélice — o firmware não precisa modelar, o hardware já tem).
 
 O wrench REALizado (que alimenta a planta) é recalculado dos µs efetivos

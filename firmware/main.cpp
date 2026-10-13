@@ -473,7 +473,7 @@ void escrever_escs(int us_a, int us_b, int us_c) {
 // Realização: força desejada no MUNDO + yaw_us por motor → µs nos ESCs.
 //   1. F_mundo → F_corpo (Rz(−ψ))  [correção vs firmware antigo]
 //   2. f_i = (2/3)(t_i·F_corpo), reescala λ p/ caber na reserva
-//   3. u_i = us_from_force(f_i) + yaw_sign_i·yaw_us; clamp ±250
+//   3. u_i = us_from_force(f_i) + yaw_sign_i·yaw_us; clamp ±500
 void realizar_controle(float Fwx, float Fwy, float yaw_us, float psi) {
   float c = cosf(psi), s = sinf(psi);
   float Fbx =  c * Fwx + s * Fwy;   // Rz(−ψ)·F_mundo
