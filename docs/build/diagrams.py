@@ -50,33 +50,48 @@ def arrow(ax, p1, p2, label=None, color=ICON, style="-|>", lw=2.0, loff=(0, 0.03
 
 
 # ───────────────────────────────────────────── diagrama 1: arquitetura de conexões
-fig, ax = plt.subplots(figsize=(10.5, 5.0), dpi=160)
+fig, ax = plt.subplots(figsize=(10.5, 5.2), dpi=160)
 ax.set_xlim(0, 1)
 ax.set_ylim(0, 1)
 ax.axis("off")
 
-box(ax, 0.03, 0.38, 0.19, 0.26, "STM32F4",
-    ["controle 200 Hz", "telemetria 25 Hz", "USB + Serial2"], tsize=14.5, lsize=12)
-box(ax, 0.40, 0.70, 0.22, 0.24, "PC — simulador",
-    ["main.py / twin --serial", "wizard.py"], tsize=14.5, lsize=12)
-box(ax, 0.40, 0.05, 0.22, 0.24, "Raspberry Pi",
-    ["agent.py (systemd)", "SSH + monitor"], tsize=14.5, lsize=12)
-box(ax, 0.78, 0.38, 0.20, 0.26, "PC — twin", ["twin --tcp", "wizard --tcp", "netcat"],
+box(ax, 0.03, 0.42, 0.19, 0.28, "STM32F4",
+    ["controle 200 Hz", "telemetria 25 Hz", "na esfera, em campo"], tsize=14.5, lsize=12)
+box(ax, 0.40, 0.42, 0.21, 0.28, "Raspberry Pi",
+    ["agent.py (systemd)", "SSH + remote desktop", "teclado/mouse + monitor"],
     tsize=14.5, lsize=12)
+box(ax, 0.77, 0.42, 0.20, 0.28, "PC — operação",
+    ["twin --tcp", "wizard --tcp", "terminal SSH"], tsize=14.5, lsize=12)
+# bancada: caixa tracejada (USB existe só ali)
+bx = FancyBboxPatch((0.335, 0.86), 0.30, 0.115,
+                    boxstyle="round,pad=0.010,rounding_size=0.012",
+                    fc="#f2f3f4", ec=MUTED, lw=1.3, linestyle=(0, (5, 4)))
+ax.add_patch(bx)
+ax.text(0.485, 0.930, "PC na bancada — só para flash", ha="center", va="center",
+        fontsize=13, fontweight="bold", color=MUTED)
+ax.text(0.485, 0.885, "twin/wizard --serial durante a bancada", ha="center", va="center",
+        fontsize=11.5, color=MUTED)
 
-arrow(ax, (0.225, 0.56), (0.395, 0.76), "USB 115200", loff=(-0.045, 0.025), lsize=11.5)
-arrow(ax, (0.395, 0.70), (0.225, 0.50), loff=(-0.05, -0.07))
-ax.text(0.243, 0.345, "comandos e telemetria nas duas portas", fontsize=11,
-        color=MUTED, style="italic", ha="left")
+arrow(ax, (0.225, 0.62), (0.395, 0.62), "Serial2 (PA2/PA3)", loff=(0.0, 0.025),
+      lsize=12, lw=2.6)
+arrow(ax, (0.395, 0.50), (0.225, 0.50), lw=2.6)
+ax.text(0.31, 0.435, "única porta em campo", fontsize=11, color=ACCENT,
+        style="italic", ha="center")
 
-arrow(ax, (0.225, 0.46), (0.395, 0.24), "Serial2", loff=(-0.02, 0.03), lsize=11.5)
-arrow(ax, (0.395, 0.19), (0.225, 0.40), loff=(-0.02, -0.065))
+arrow(ax, (0.615, 0.62), (0.765, 0.62), "TCP 9999", loff=(0.0, 0.025), lsize=12, lw=2.6)
+arrow(ax, (0.765, 0.50), (0.615, 0.50), lw=2.6)
+ax.text(0.69, 0.435, "LAN / hotspot / túnel SSH", fontsize=11, color=MUTED,
+        style="italic", ha="center")
 
-arrow(ax, (0.625, 0.78), (0.775, 0.60), "TCP 9999", loff=(0.03, 0.025), lsize=11.5)
-arrow(ax, (0.775, 0.50), (0.625, 0.72), loff=(0.035, -0.055))
+ax.add_patch(FancyArrowPatch((0.20, 0.70), (0.36, 0.845), arrowstyle="-|>",
+                             mutation_scale=16, color=MUTED, lw=1.5,
+                             linestyle=(0, (5, 4))))
+ax.text(0.155, 0.735, "USB: só na bancada", fontsize=11, color=MUTED,
+        style="italic", ha="left", rotation=30)
 
-ax.text(0.5, 0.955, "O agente na Rasp é uma ponte Serial2 <-> TCP. Sem rede, o PC fala "
-        "direto com o STM pela USB.", ha="center", fontsize=12, color=MUTED, style="italic")
+ax.text(0.5, 0.03, "Em campo, a única porta do STM é a Serial2 (via Rasp). Operação local: "
+        "nc localhost 9999 no terminal da Rasp.", ha="center", fontsize=12,
+        color=MUTED, style="italic")
 fig.tight_layout(pad=0.3)
 fig.savefig(os.path.join(OUT, "arquitetura.png"), facecolor="white")
 plt.close(fig)

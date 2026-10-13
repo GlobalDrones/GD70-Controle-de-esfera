@@ -333,15 +333,20 @@ add_table(
 # ══════════════════════════════════ CAP 2 ══════════════════════════════════
 H("2. Arquitetura e referenciais", 0)
 H("2.1 Quem conversa com quem", 1)
-figure("arquitetura.png", "Figura 2.1 — Caminhos de comunicação. Os mesmos comandos valem "
-       "nas duas portas seriais do STM.")
-P("O STM32 (Black Pill) roda o firmware de controle. Ele expõe a mesma interface em duas "
-  "portas: a <b>USB</b> (porta <b>Serial</b> do Arduino) e a <b>Serial2</b> (pinos PA2/PA3, "
-  "115200 baud), que conecta à Raspberry Pi. A Rasp roda o agente "
-  "(<b>rasp/agent.py</b>), uma ponte que publica tudo o que chega da Serial2 por TCP na porta "
-  "9999 e encaminha ao STM o que os clientes enviarem. O PC com o simulador, o twin e o "
-  "wizard escolhe o caminho na hora de conectar: serial USB direta (bancada, sem rede) ou "
-  "TCP (campo / rede local / túnel SSH).")
+figure("arquitetura.png", "Figura 2.1 — Topologia real: a USB só existe na bancada de flash; "
+       "em campo, a única porta do STM é a Serial2, via Rasp.")
+P("O firmware é configurado e gravado no PC (USB) e, em seguida, o STM vai para a placa da "
+  "esfera — <b>a partir daí a única comunicação é a Serial2</b> (PA2/PA3, 115200 baud), "
+  "conectada à Raspberry Pi. Na Rasp roda o agente (<b>rasp/agent.py</b> como serviço "
+  "systemd): publica tudo o que chega da Serial2 por TCP na porta 9999, para múltiplos "
+  "clientes, e encaminha ao STM o que os clientes enviarem. O posto de operação é o "
+  "próprio teclado/mouse da Rasp (terminal local) e, pela rede, o SSH/remote desktop e o "
+  "twin no PC (python -m twin --tcp).")
+P("Dois detalhes práticos dessa topologia: (1) como o agente ocupa a porta serial, no "
+  "terminal da Rasp fala-se com o STM <b>através dele</b> — nc localhost 9999 dá a mesma "
+  "linha de comando; (2) tudo o que importa em operação é ajustável sem reflashing — ganhos "
+  "(G/R), calibração por motor (M, via wizard --push), L da sessão, heading e visão. Flash "
+  "só é preciso para mudar a lei de controle ou constantes compiladas.")
 H("2.2 Referenciais e convenção de eixos", 1)
 bullets([
     "<b>Corpo</b> = referencial do sensor (MPU6050 + futuras câmeras), que gira com o heading. "
@@ -455,7 +460,9 @@ bullets([
 
 # ══════════════════════════════════ CAP 5 ══════════════════════════════════
 H("5. Referência de comandos", 0)
-P("Todos os comandos funcionam <b>igualmente na USB e na Serial2</b>. Comandos de um caractere "
+P("Todos os comandos funcionam <b>igualmente nas duas portas</b> — USB (só na bancada de "
+  "flash) e Serial2 via Rasp (a porta de campo; do terminal da Rasp, use nc localhost 9999 "
+  "através do agente). Comandos de um caractere "
   "executam imediatamente (sem Enter); comandos em linha terminam com Enter. Selos: "
   + badge("OBRIG") + " obrigatório por sessão · " + badge("COND")
   + " condicional (depende do evento) · " + badge("OPT") + " opcional.")
@@ -569,15 +576,18 @@ H("6.1 Sequência de bancada (com frequência/gatilho de cada etapa)", 1)
 add_table(
     ["#", "Etapa", "Comando/procedimento", "Quando fazer (frequência/gatilho)"],
     [
-        ["1", "Flash + smoke test", "compilar e gravar firmware/main.cpp; abrir a serial; "
-         "conferir banner e boot com loops OFF", "uma vez por versão do firmware"],
+        ["1", "Flash + smoke test", "compilar e gravar firmware/main.cpp no PC (USB), abrir a "
+         "serial e conferir banner + boot com loops OFF. Depois instalar o STM na esfera: a "
+         "USB acaba aí — em campo só há Serial2 via Rasp",
+         "uma vez por versão do firmware (exige buscar o STM)"],
         ["2", "Teste de motores", "'m' — confirmar a↔PA0/b↔PA15/c↔PA1 e os sentidos de giro",
          "após montar/mexer na fiação dos motores"],
         ["3", "Eixos do MPU", "incluir a esfera em direção conhecida: sx/sy da telemetria "
          "devem responder nos eixos certos; girar a esfera inclinada à mão: sx/sy NÃO podem "
          "girar junto (senão, inverter COMP_YAW_SIGN no firmware)", "após remontar o sensor "
          "ou trocar a orientação do chip"],
-        ["4", "Wizard por motor", "python wizard.py --serial COM7 --push (Cap. 8)",
+        ["4", "Wizard por motor", "python wizard.py --serial COM7 --push (na bancada) ou "
+         "--tcp <rasp> / --tcp localhost:9999 na Rasp (Cap. 8)",
          "<b>obrigatório na 1ª sessão</b> e após qualquer troca de motor/ESC/hélice; "
          "recomendado a cada grande revisão"],
         ["5", "Calibração 'z'", "esfera parada no prumo, comando z", "<b>todo boot</b> e após "
@@ -743,12 +753,15 @@ H("9.1 Transportes e como escolher", 1)
 add_table(
     ["Transporte", "Comando", "Quando usar"],
     [
-        ["Serial USB direta", "python -m twin --serial COM7", "bancada: zero rede, zero "
-         "configuração — recomendado para começar"],
+        ["Serial USB direta", "python -m twin --serial COM7", "bancada de flash: zero rede, "
+         "zero configuração. Em campo não existe — a USB fica no PC de flash"],
         ["TCP via agente na Rasp", "python -m twin --tcp 192.168.0.50[:9999]",
-         "campo/operando com a Rasp no monitor; exige o agente rodando"],
+         "operação real: o PC alcança a Rasp na rede (LAN, hotspot da Rasp) e o agente "
+         "ponteia a Serial2"],
         ["Túnel SSH", "ssh -L 9999:localhost:9999 pi@<rasp> e depois --tcp 127.0.0.1:9999",
          "quando o PC não alcança a Rasp por IP direto"],
+        ["Terminal da própria Rasp", "nc localhost 9999 (teclado/mouse/monitor da Rasp)",
+         "sem PC nenhum: a mesma linha de comandos, através do agente"],
         ["STM simulado", "python -m twin --sim", "desenvolver/treinar sem hardware; mesma "
          "planta, atuadores, controlador e protocolo"],
     ],
@@ -764,7 +777,16 @@ code([
 ])
 P("O agente (rasp/agent.py) lê a Serial2 do STM, publica as linhas por TCP na porta 9999 "
   "para múltiplos clientes (twin, wizard, netcat) e encaminha aos clientes o que a serial "
-  "manda; comandos digitados por qualquer cliente vão ao STM.")
+  "manda; comandos digitados por qualquer cliente vão ao STM. Como o agente ocupa a porta "
+  "serial, no terminal da Rasp não se abre screen/minicom direto — o caminho é "
+  "nc localhost 9999 (ou parar o serviço se precisar da serial exclusiva). O wizard também "
+  "roda na Rasp sem PC: python wizard.py --tcp localhost:9999 --push.")
+P("Sobre o remote desktop sem HDMI (VNC/RDP headless): ótimo para terminais, o agente e, no "
+  "futuro, a visão; rode porém a <b>janela do twin no PC</b> via --tcp, pois animação "
+  "matplotlib sobre remote desktop fica arrastada, e o teclado de atalhos do twin está no PC "
+  "de qualquer forma. Nota de segurança: quem controla a Rasp controla a esfera; proteja o "
+  "SSH (chave/senha forte) e lembre que o k (parada geral) funciona de qualquer cliente "
+  "conectado, inclusive do terminal local da Rasp se a rede cair.")
 H("9.3 A janela do twin", 1)
 bullets([
     "<b>Esfera fantasma</b> (cinza, tracejada): estado REAL da telemetria — inclinação, "
@@ -858,8 +880,9 @@ add_table(
         ["Motores alternam de lado em regime permanente", "comando ruído em torno de zero + "
          "alocação redistribuindo", "aceitável dentro da banda; se incomodar, a política do "
          "Cap. 10.5 resolve"],
-        ["Telemetria não aparece", "serial errada/baud errado/agente parado",
-         "conferir 115200, a porta (COMx / /dev/serial0) e 'systemctl status esfera-agent'"],
+        ["Telemetria não aparece", "serial/baud errados; agente parado; porta ocupada pelo "
+         "agente", "conferir 115200 e a porta; systemctl status esfera-agent; na Rasp usar "
+         "nc localhost 9999 (não abrir a serial direto — o agente a ocupa)"],
         ["[ERRO] MPU em movimento ao calibrar", "gate de quietude detectou movimento",
          "esperar a esfera parar de verdade e repetir 'z'"],
         ["AS5600 não encontrado", "fiacao/barramento I2C",
@@ -879,7 +902,9 @@ add_table(
 
 # ══════════════════════════════════ APÊNDICES ══════════════════════════════════
 H("Apêndice A — Cartão de referência rápida", 0)
-P("Uma página para imprimir e colar na bancada.", style="note")
+P("Uma página para imprimir e colar na bancada. Onde digitar: na bancada, na serial USB; "
+  "em campo, nc localhost 9999 no terminal da Rasp, ou pelo twin no PC (--tcp).",
+  style="note")
 add_table(
     ["Comando", "Ação"],
     [
@@ -1002,6 +1027,13 @@ writer.add_metadata({
     "/Creator": "Equipe Esfera",
     "/Subject": "Manual de operação: hardware, firmware, comandos, calibrações e digital twin",
 })
-with open(FINAL_PDF, "wb") as fh:
-    writer.write(fh)
-print("FINAL OK:", FINAL_PDF)
+try:
+    with open(FINAL_PDF, "wb") as fh:
+        writer.write(fh)
+    print("FINAL OK:", FINAL_PDF)
+except PermissionError:
+    FINAL_PDF = FINAL_PDF.replace(".pdf", "_novo.pdf")
+    with open(FINAL_PDF, "wb") as fh:
+        writer.write(fh)
+    print("FINAL OK (original travado — feche o leitor de PDF e troque os arquivos):",
+          FINAL_PDF)
