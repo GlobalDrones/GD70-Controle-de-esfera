@@ -61,9 +61,34 @@ completamente seguras.
 
 - Um computador com Python 3.10 ou mais novo, com o repositório clonado e
   as dependências instaladas (`pip install -r requirements.txt`);
-- Um cabo USB para ligar o STM ao computador;
-- A partir da Etapa 4: a Raspberry Pi na mesma rede (ou com cabo próprio);
+- Um cabo USB para ligar o STM ao computador na hora de gravar o firmware;
+- A Raspberry Pi com acesso à rede (a partir da Etapa 4);
 - A partir da Etapa 5: a bateria dos ESCs — **só ligue quando chegar lá**.
+
+### Onde o computador precisa estar (e quando ele se desconecta do STM)
+
+A gravação do firmware (Etapa 1) acontece na mesa do computador, com o STM
+ligado por USB. Terminando a gravação, você desconecta o cabo, instala o
+STM na esfera e **ele não precisa mais voltar perto do computador**: a
+partir daí a placa é alimentada pela bateria da esfera, como vocês já
+operam hoje.
+
+O que as etapas seguintes precisam não é do cabo USB, e sim de um **caminho
+de dados** até o STM — e existem dois:
+
+1. **USB direto no computador** — só faz sentido se a esfera estiver ao
+   alcance de um cabo (3 a 5 m; mais que isso exige cabo ativo). Um detalhe
+   útil: a própria USB alimenta a placa e os sensores, então nas Etapas 2 e
+   3 a bateria da esfera pode continuar desligada;
+2. **Pela Raspberry Pi, pela rede** — o caminho para quando a esfera está
+   longe do computador. Neste caso, **faça a Etapa 4 antes das Etapas 2 e
+   3**: com a Rasp ligada à USB do STM (o mesmo arranjo elétrico de hoje —
+   placa na bateria da esfera, USB só de dados), o twin alcança o STM pela
+   rede com `python -m twin --tcp <ip-da-rasp>`, não importa a distância.
+
+Em resumo: a ordem Etapa 2 → 3 → 4 pode ser trocada por Etapa 4 → 2 → 3
+quando a esfera ficar longe do PC. As etapas funcionam exatamente igual
+nos dois caminhos — só muda como o twin se conecta (`--serial` ou `--tcp`).
 
 ---
 
@@ -136,6 +161,10 @@ desligados.
 **Objetivo:** confirmar que os comandos chegam ao STM e que a telemetria
 volta ao computador — a "conversa" completa, sem nenhum motor ligado.
 Mantenha a bateria dos ESCs desconectada durante toda esta etapa.
+
+**Como conectar:** se a esfera estiver perto do computador, use USB direto
+(o comando abaixo). Se estiver longe, suba primeiro a Etapa 4 (Rasp) e volte
+aqui usando `python -m twin --tcp <ip-da-rasp>` — o resto da etapa é igual.
 
 **Passo a passo:**
 
