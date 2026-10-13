@@ -260,8 +260,15 @@ Na Raspberry Pi (por SSH ou no teclado dela):
 
 ```bash
 git clone https://github.com/iNeewbie/esfera.git && cd esfera
-pip3 install -r Raspberry/requirements.txt
-python3 Raspberry/main.py
+
+# o Raspberry Pi OS novo bloqueia pip direto no sistema ("externally managed");
+# a solução é um ambiente virtual — estes 3 comandos rodam UMA única vez:
+python3 -m venv .venv --system-site-packages   # enxerga os backends de GPIO do sistema
+source .venv/bin/activate
+pip install -r Raspberry/requirements.txt
+
+# para rodar (e em todo terminal novo: source .venv/bin/activate antes):
+python Raspberry/main.py
 ```
 
 No seu computador:

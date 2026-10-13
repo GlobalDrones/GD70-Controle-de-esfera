@@ -120,9 +120,17 @@ conectam pela ponte TCP (IP direto ou túnel `ssh -L 9999:localhost:9999`).
 
 ```bash
 git clone https://github.com/iNeewbie/esfera.git && cd esfera
-pip3 install -r Raspberry/requirements.txt   # opencv-CONTRIB (WLS), pyserial, gpiozero…
-python3 Raspberry/main.py                    # a partir da raiz do repo
+
+# ambiente virtual (o Raspberry Pi OS novo bloqueia pip global) — uma única vez
+python3 -m venv .venv --system-site-packages   # enxerga os backends de GPIO do sistema
+source .venv/bin/activate
+pip install -r Raspberry/requirements.txt      # opencv-CONTRIB (WLS), pyserial, gpiozero…
+
+python Raspberry/main.py                       # a partir da raiz do repo, com o venv ativo
 ```
+
+Em terminais novos: `source .venv/bin/activate` antes de rodar (ou chame
+`~/esfera/.venv/bin/python` direto).
 
 ### Checklist de validação na Rasp (após o flash do firmware v2)
 
