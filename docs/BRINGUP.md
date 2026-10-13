@@ -132,11 +132,17 @@ que vem depois funciona sem esta etapa.
 
 **Passo a passo:**
 
-1. Instale o Arduino IDE (ou o `arduino-cli`) com o suporte a placas STM32
-   (core STM32Duino) e selecione a placa **Black Pill F401 ou F411**;
-2. Abra `firmware/main.cpp` e mande compilar;
-3. Ligue o STM ao computador por USB e grave o firmware;
-4. Abra um monitor serial na porta do STM, com velocidade 115200.
+1. Instale o PlatformIO (a extensão do VS Code é o caminho mais fácil). O
+   repositório já traz a configuração pronta em `firmware/platformio.ini` —
+   ela inclui as flags que fazem a USB do STM virar porta serial e habilita
+   a Serial2, além da biblioteca do encoder AS5600;
+2. Abra a pasta `firmware/` como projeto e mande compilar e gravar
+   (`pio run -t upload`). A gravação padrão usa o gravador **ST-Link**
+   (4 fios: 3V3, SWDIO, SWCLK e GND); o próprio arquivo `platformio.ini`
+   traz as instruções para trocar para gravação pela USB (DFU), se
+   preferir gravar sem gravador;
+3. Depois de gravado, ligue o STM ao computador por USB, abra um monitor
+   serial na porta que aparecer, com velocidade 115200.
 
 Ponto de atenção: este firmware foi escrito sem um compilador STM à mão,
 então **é normal que a primeira compilação apresente erros** (uma vírgula,
