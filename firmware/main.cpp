@@ -112,6 +112,12 @@ const float F_MAX_500 = 18.0f;   // N @ ±500 µs (chute; medir por motor)
 const float REV_RATIO = 0.60f;   // kf_rev/kf_fwd (chute)
 const float DB_US     = 30.0f;   // zona morta (chute)
 const float F_MIN_N   = 0.01f;   // abaixo disso, µs = neutro (anti-chatter)
+// Travamento direcional do ESC observado na bancada: comando pequeno num
+// sentido (~±60 µs, PWM ~1440–1560) trava AQUELE sentido; só comando válido
+// no sentido OPOSTO destrava. PROVISÓRIO — o wizard medirá por ESC. Para
+// nunca habitar a faixa: comandos sub-piso viram neutro (0 ou ≥ latch+15).
+const float ESC_LATCH_US    = 60.0f;
+const float LATCH_MARGIN_US = 15.0f;
 const int   PWM_TEST_DELTA = 120; // teste de identificação 'm'
 
 // --- Modelo POR MOTOR (defaults geométricos; comando M ajusta em runtime) ---
@@ -439,7 +445,13 @@ void passo_fusao(const MpuSample &s, float dt) {
 //     o atraso real do ESC/hélice já está no hardware) ---
 // =========================================================================================
 float us_from_force(int i, float f) {
-  if (fabsf(f) < F_MIN_N) return 0.0f;
+  // Gate anti-travamento: o menor µs não-nulo já nasce FORA da faixa do ESC
+  // (latch + margem) — comandos sub-gate viram neutro, como no simulador.
+  float floor_us = ESC_LATCH_US + LATCH_MARGIN_US;
+  float kf_gate = (f >= 0) ? motores[i].kf_fwd : motores[i].kf_rev;
+  float du = floor_us - motores[i].dz_us;
+  float gate = (du > 0) ? kf_gate * du * du : 0.0f;
+  if (fabsf(f) < fmaxf(F_MIN_N, gate)) return 0.0f;
   float kf = (f > 0) ? motores[i].kf_fwd : motores[i].kf_rev;
   return (f > 0 ? 1.0f : -1.0f) *
          (motores[i].dz_us + sqrtf(fabsf(f) / kf));
@@ -482,8 +494,14 @@ void realizar_controle(float Fwx, float Fwy, float yaw_us, float psi) {
   }
 
   int us[3];
+  float floor_us = ESC_LATCH_US + LATCH_MARGIN_US;
   for (int i = 0; i < 3; i++) {
     float u = us_from_force(i, f_des[i] * lam) + motores[i].yaw_sign * yaw_us;
+    // Quantização anti-banda no µs FINAL (swing+yaw): a soma pode cair dentro
+    // da faixa de travamento — 0 ou ≥ piso, nunca dentro (paridade com o
+    // _actuate do Python; o caminho do wizard NÃO quantiza, de propósito).
+    if (u > 0.0f && u < floor_us) u = 0.0f;
+    else if (u < 0.0f && u > -floor_us) u = 0.0f;
     us[i] = ESC_NEUTRAL + (int)constrain(lroundf(u), -PWM_LIMIT_US, PWM_LIMIT_US);
   }
   escrever_escs(us[0], us[1], us[2]);

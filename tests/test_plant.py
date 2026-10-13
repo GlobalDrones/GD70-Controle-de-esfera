@@ -141,9 +141,11 @@ def test_motor_labels_and_geometry():
 
 
 def test_thrust_curve_roundtrip():
-    """us_from_force e force_from_us são inversas exatas (acima da zona morta)."""
+    """us_from_force e force_from_us são inversas exatas ACIMA do piso
+    anti-travamento (comandos sub-piso viram neutro — nunca habitam a faixa
+    de travamento do ESC)."""
     cluster = ThrusterCluster()
-    for u in (60.0, 120.0, 240.0, -60.0, -180.0):
+    for u in (100.0, 120.0, 240.0, -120.0, -180.0):
         f = cluster.force_from_us(np.full(3, u))
         u_back = cluster.us_from_force(f)
         np.testing.assert_allclose(u_back, u, rtol=1e-9)
@@ -151,9 +153,21 @@ def test_thrust_curve_roundtrip():
         u = cluster.us_from_force(np.full(3, f))
         f_back = cluster.force_from_us(u)
         np.testing.assert_allclose(f_back, f, rtol=1e-9)
-    # dentro da zona morta / abaixo do limiar: força zero
+    # dentro da zona morta / abaixo do piso: neutro
     assert cluster.force_from_us(np.full(3, 20.0)) == pytest.approx(0.0)
-    assert cluster.us_from_force(np.full(3, 0.005)) == pytest.approx(0.0)
+    assert cluster.us_from_force(np.full(3, 0.05)) == pytest.approx(0.0)
+
+
+def test_command_floor_avoids_latch_band():
+    """O menor µs não-nulo comandado já nasce FORA da faixa de travamento
+    (latch 60 µs + margem) — o controlador nunca habita a faixa."""
+    cluster = ThrusterCluster()
+    latch = cluster.motors[0].latch_us
+    for f in (0.17, 0.2, 0.3):  # logo acima do piso (~0,165 N)
+        u = cluster.us_from_force(np.array([f, 0.0, 0.0]))[0]
+        assert abs(u) > latch, f"F={f}: µs {u} dentro da faixa de travamento"
+        f_back = cluster.force_from_us(np.array([u, 0.0, 0.0]))[0]
+        assert f_back > 0.0  # e o ESC responde
 
 
 def test_thrust_to_pwm_mapping():
@@ -177,14 +191,34 @@ def test_thrust_to_pwm_mapping():
 
 
 def test_thrust_allocation_exact_region_matches_command():
-    """Dentro da reserva e sem yaw, a força realizada é a comandada, em
-    qualquer heading (a rotação mundo→corpo é interna e exata)."""
+    """Região exata da alocação = todo componente por motor ACIMA do gate
+    anti-travamento — aí a força realizada é a comandada, em qualquer
+    heading (componentes sub-gate viram neutro de propósito: nunca habitam
+    a faixa de travamento do ESC)."""
     cluster = ThrusterCluster(NO_LAG)
+    gate_fwd = min(m.kf_fwd for m in cluster.motors) * (75.0 - 30.0) ** 2
+    gate_rev = min(m.kf_rev for m in cluster.motors) * (75.0 - 30.0) ** 2
     for heading in (0.0, 1.0, -2.5):
-        for force in (np.array([1.0, 0.0, 0.0]), np.array([0.7, 0.7, 0.0])):
+        for force in (np.array([2.0, 0.0, 0.0]), np.array([1.4, 1.4, 0.0])):
+            rot = ThrusterCluster.rotation_z(heading)
+            f_body = rot.T @ force
+            f_mot = (2.0 / 3.0) * (cluster.T.T @ f_body[:2])
+            if any(
+                (0 <= f < gate_fwd) or (-gate_rev < f < 0) for f in f_mot
+            ):
+                continue  # componente sub-gate: zero intencional
             act = cluster.realize(force, 0.0, heading, DT)
             np.testing.assert_allclose(act.force_world, force, atol=1e-9)
-            assert np.all(np.abs(act.pwm_us - 1500.0) <= 250.0 + 1e-9)
+            assert np.all(np.abs(act.pwm_us - 1500.0) <= 500.0 + 1e-9)
+
+
+def test_subgate_component_snaps_to_neutral():
+    """Componente por motor abaixo do gate anti-travamento vira neutro — o
+    erro de realização fica confinado ao componente descartado (pequeno)."""
+    cluster = ThrusterCluster(NO_LAG)
+    act = cluster.realize(np.array([1.0, 0.0, 0.0]), 0.0, heading=-2.5, dt=DT)
+    err = np.linalg.norm(act.force_world[:2] - np.array([1.0, 0.0]))
+    assert err < 0.15  # só o componente sub-gate (~0,08 N) é sacrificado
 
 
 def test_yaw_distribution_pure_torque():
@@ -208,14 +242,17 @@ def test_thrust_allocation_saturates():
 
 
 def test_actuator_lag_first_order():
-    """O lag de 1ª ordem suaviza o comando com constante de tempo tau."""
+    """O lag de 1ª ordem suaviza a RESPOSTA (não o comando): pwm_us reporta
+    o comandado (salta na hora); o empuxo sobe com constante de tempo tau."""
     params = ActuatorParams(lag_tau=0.12)
     cluster = ThrusterCluster(params)
-    # degrau de comando: após ~1 tau, ~63% do valor
     u_target = 200.0
-    for _ in range(12):  # 0,12 s
+    for _ in range(12):  # 0,12 s ≈ 1 tau
         act = cluster.command_raw(np.full(3, u_target), heading=0.0, dt=DT)
-    u_after = act.pwm_us[0] - 1500.0
+    # comando chega inteiro ao ESC
+    assert act.pwm_us[0] - 1500.0 == pytest.approx(u_target)
+    # empuxo efetivo: recupera o µs pós-lag pela inversa da curva
+    u_after = cluster.us_from_force(act.thrusts)[0]
     assert 0.5 * u_target < u_after < 0.8 * u_target
 
 
@@ -224,7 +261,7 @@ def test_calibration_roundtrip(tmp_path):
     cluster.apply_motor_calib(
         1,
         MotorCalib(label="b", thrust_dir=(0.0, 1.0), yaw_sign=-1.0,
-                   kf_fwd=9e-5, kf_rev=5e-5, deadzone_us=25.0),
+                   kf_fwd=9e-5, kf_rev=5e-5, deadzone_us=25.0, latch_us=45.0),
     )
     path = os.path.join(tmp_path, "calib.json")
     cluster.save_calibration(path)
@@ -235,6 +272,62 @@ def test_calibration_roundtrip(tmp_path):
         np.testing.assert_allclose(m_load.thrust_dir, m_orig.thrust_dir)
         assert m_load.yaw_sign == m_orig.yaw_sign
         assert m_load.kf_fwd == m_orig.kf_fwd
+        assert m_load.latch_us == m_orig.latch_us
+
+
+# ------------------------------------------- travamento direcional do ESC
+
+
+def _pulse(cluster, u, dt=0.01, steps=50):
+    """Pulsa u por `steps` passos e devolve o último ActuatorOutput."""
+    act = None
+    for _ in range(steps):
+        act = cluster.command_raw(np.array([u, 0.0, 0.0]), heading=0.0, dt=dt)
+    return act
+
+
+def test_esc_latch_blocks_after_small_command():
+    """Comando pequeno trava o sentido; comandos GRANDES seguintes não giram."""
+    cluster = ThrusterCluster(NO_LAG)
+    # pequeno positivo (dentro de 60 µs): trava a frente
+    act = _pulse(cluster, 50.0, steps=5)
+    assert act.thrusts[0] == pytest.approx(0.0)
+    # comando grande na frente: continua travado (não destrava sozinho)
+    act = _pulse(cluster, 300.0)
+    assert act.pwm_us[0] == pytest.approx(1800.0)  # comando chega ao ESC
+    assert act.thrusts[0] == pytest.approx(0.0)     # ...mas o motor não gira
+
+
+def test_esc_latch_unlocks_by_reversal():
+    """Só um comando válido no sentido OPOSTO destrava."""
+    cluster = ThrusterCluster(NO_LAG)
+    _pulse(cluster, 50.0, steps=5)     # trava frente
+    _pulse(cluster, 300.0, steps=5)    # continua travado
+    act = _pulse(cluster, -300.0)      # ré válida: destrava a frente
+    assert act.thrusts[0] < 0.0        # gira na ré
+    act = _pulse(cluster, 300.0)       # frente destravada agora
+    assert act.thrusts[0] > 0.0
+
+
+def test_esc_latch_per_motor_and_disable():
+    """latch_us = 0 desativa o modelo no motor; independentes entre motores."""
+    cluster = ThrusterCluster(NO_LAG)
+    calib = MotorCalib(**{**cluster.motors[1].to_dict(), "latch_us": 0.0})
+    cluster.apply_motor_calib(1, calib)
+    # motor 1 sem latch: pequeno comando não trava (força segue a curva)
+    act = cluster.command_raw(np.array([0.0, 50.0, 0.0]), 0.0, DT)
+    assert act.thrusts[1] > 0.0
+    # motor 0 com latch trava normalmente
+    act = cluster.command_raw(np.array([50.0, 0.0, 0.0]), 0.0, DT)
+    assert act.thrusts[0] == pytest.approx(0.0)
+
+
+def test_esc_latch_neutral_does_not_block():
+    """Neutro exato (u=0) não trava nada."""
+    cluster = ThrusterCluster(NO_LAG)
+    _pulse(cluster, 0.0, steps=10)
+    act = _pulse(cluster, 300.0)
+    assert act.thrusts[0] > 0.0  # nunca travou
 
 
 def test_inverted_motor_changes_response():
@@ -247,9 +340,10 @@ def test_inverted_motor_changes_response():
     f = np.array([1.0, 0.0, 0.0])
     act_n = normal.realize(f, 0.0, 0.0, DT)
     act_i = inverted.realize(f, 0.0, 0.0, DT)
-    # mesmo comando de força: só o torque muda de sinal (distribuição de yaw)
-    act_yaw_n = normal.realize(np.zeros(3), 50.0, 0.0, DT)
-    act_yaw_i = inverted.realize(np.zeros(3), 50.0, 0.0, DT)
+    # mesmo comando de força: só o torque muda de sinal (distribuição de yaw;
+    # 120 µs — acima do piso anti-travamento, sub-piso é zero de propósito)
+    act_yaw_n = normal.realize(np.zeros(3), 120.0, 0.0, DT)
+    act_yaw_i = inverted.realize(np.zeros(3), 120.0, 0.0, DT)
     assert act_yaw_n.torque_heading > 0
     assert act_yaw_i.torque_heading < act_yaw_n.torque_heading
 

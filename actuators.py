@@ -53,6 +53,7 @@ from typing import List, Optional, Tuple
 import numpy as np
 
 F_MIN_N = 0.01  # N, limiar anti-chattering (abaixo disso, µs = neutro)
+LATCH_MARGIN_US = 15.0  # folga acima da faixa de travamento medida do ESC
 CALIB_VERSION = 1
 
 
@@ -96,6 +97,12 @@ class MotorCalib:
     kf_fwd: float = 0.0  # N/µs² (preenchido pelo default do cluster)
     kf_rev: float = 0.0
     deadzone_us: float = 30.0
+    # Travamento direcional do ESC (latch), observado na bancada: comando
+    # pequeno num sentido (|u| <= latch_us) trava AQUELE sentido — comandos
+    # seguintes fora da faixa não destravam; só um comando válido no sentido
+    # OPOSTO destrava. ~60 µs (PWM ~1440–1560) é a observação inicial;
+    # PROVISÓRIO até o wizard medir por ESC. 0 = desativa o modelo.
+    latch_us: float = 60.0
 
     def __post_init__(self) -> None:
         d = np.asarray(self.thrust_dir, dtype=float)
@@ -107,6 +114,8 @@ class MotorCalib:
             raise ValueError(f"motor {self.label}: yaw_sign deve ser ±1")
         if self.kf_fwd <= 0 or self.kf_rev <= 0 or self.deadzone_us < 0:
             raise ValueError(f"motor {self.label}: calibração inválida")
+        if self.latch_us < 0:
+            raise ValueError(f"motor {self.label}: latch_us não pode ser negativo")
 
     def to_dict(self) -> dict:
         return {
@@ -116,6 +125,7 @@ class MotorCalib:
             "kf_fwd": self.kf_fwd,
             "kf_rev": self.kf_rev,
             "deadzone_us": self.deadzone_us,
+            "latch_us": self.latch_us,
         }
 
     @staticmethod
@@ -127,6 +137,7 @@ class MotorCalib:
             kf_fwd=float(data["kf_fwd"]),
             kf_rev=float(data["kf_rev"]),
             deadzone_us=float(data["deadzone_us"]),
+            latch_us=float(data.get("latch_us", 60.0)),
         )
 
 
@@ -180,8 +191,10 @@ class ThrusterCluster:
         self.kf_rev = np.array([m.kf_rev for m in motors])
         self.dz = np.array([m.deadzone_us for m in motors])
 
-        # Estado do atraso de atuação (µs de offset em relação ao neutro).
+        # Estado do atraso de atuação (µs de offset em relação ao neutro) e
+        # do travamento direcional dos ESCs (blocked[motor, 0=frente 1=ré]).
         self._u_lag = np.zeros(self.N_THRUSTERS)
+        self._blocked = np.zeros((self.N_THRUSTERS, 2), dtype=bool)
 
     # ------------------------------------------------------------ calibração
 
@@ -225,8 +238,9 @@ class ThrusterCluster:
         self.dz[index] = calib.deadzone_us
 
     def reset(self) -> None:
-        """Zera o estado do lag (µs de volta ao neutro)."""
+        """Zera o estado do lag e dos travamentos (µs de volta ao neutro)."""
         self._u_lag[:] = 0.0
+        self._blocked[:] = False
 
     # ----------------------------------------------------------- capacidades
 
@@ -265,14 +279,27 @@ class ThrusterCluster:
     # ------------------------------------------------------ conversões µs↔N
 
     def us_from_force(self, thrusts) -> np.ndarray:
-        """Força (N) → offset de µs por motor (inversa exata da curva)."""
+        """Força (N) → offset de µs por motor.
+
+        Inversa exata da curva ACIMA de um piso por motor: comandos abaixo
+        do piso viram neutro, e o menor µs não-nulo já nasce FORA da faixa
+        de travamento do ESC (latch + margem) — o controlador nunca habita
+        a faixa que trava o sentido.
+        """
         f = np.asarray(thrusts, dtype=float)
         kf = np.where(f >= 0.0, self.kf_fwd, self.kf_rev)
         us = np.zeros_like(f)
-        mask = np.abs(f) >= F_MIN_N
-        us[mask] = np.sign(f[mask]) * (
-            self.dz[mask] + np.sqrt(np.abs(f[mask]) / kf[mask])
-        )
+        for i in range(self.N_THRUSTERS):
+            gate = F_MIN_N
+            latch = self.motors[i].latch_us
+            if latch > 0:
+                floor = latch + LATCH_MARGIN_US
+                kf_i = kf[i]
+                gate = max(gate, kf_i * max(floor - self.dz[i], 0.0) ** 2)
+            if abs(f[i]) >= gate:
+                us[i] = np.sign(f[i]) * (
+                    self.dz[i] + np.sqrt(abs(f[i]) / kf[i])
+                )
         return us
 
     def force_from_us(self, u_offsets) -> np.ndarray:
@@ -311,15 +338,79 @@ class ThrusterCluster:
                 lam = min(lam, cap / abs(f_des[i]))
         return self.us_from_force(f_des * lam)
 
-    def _apply_lag_and_clamp(self, u_cmd: np.ndarray, dt: float) -> np.ndarray:
-        """Atraso de 1ª ordem + clamp de segurança por motor."""
+    def _actuate(self, u_cmd: np.ndarray, dt: float, band_guard: bool = True):
+        """Caminho físico do comando até o empuxo (ordem importa!).
+
+        1. (band_guard) QUANTIZAÇÃO anti-banda: no caminho de CONTROLE, um
+           µs que cairia dentro da faixa de travamento vira NEUTRO — 0 ou
+           ≥ (latch + margem), nunca dentro. Sem isso a aproximação final
+           dos degraus decai pela faixa, trava os ESCs e a esfera derrapa
+           sem atrito até destravar do outro lado (sobressinal ~180°).
+           O caminho do wizard (command_raw) NÃO quantiza: o modelo do ESC
+           precisa ser exercitável (e medível) com comandos na faixa;
+        2. clamp: o ESC recebe u_cmd limitado à faixa de segurança;
+        3. LATCH: o ESC decide se responde — o travamento é reação ao PWM
+           RECEBIDO (que salta direto ao alvo), não ao µs pós-atraso;
+        4. LAG: a força efetiva persegue o µs liberado pelo ESC (resposta
+           aeromecânica, depois da decisão do ESC).
+
+        Devolve (u_comandado, u_efetivo) — a telemetria reporta o
+        comandado (como o STM real); o empuxo vem do efetivo.
+        """
         if dt <= 0:
             raise ValueError("dt deve ser positivo")
+        u_cmd = np.asarray(u_cmd, dtype=float).copy()
+        if band_guard:
+            for i in range(self.N_THRUSTERS):
+                floor = self.motors[i].latch_us + LATCH_MARGIN_US
+                if latch_band := (0.0 < abs(u_cmd[i]) < floor):
+                    u_cmd[i] = 0.0
+        u_cmd_clamped = np.clip(
+            u_cmd, -self.params.pwm_limit_us, self.params.pwm_limit_us
+        )
+        u_allowed = self._esc_latch(u_cmd_clamped)
         alpha = dt / (dt + self.params.lag_tau)
-        self._u_lag += alpha * (u_cmd - self._u_lag)
-        return np.clip(
+        self._u_lag += alpha * (u_allowed - self._u_lag)
+        return u_cmd_clamped, np.clip(
             self._u_lag, -self.params.pwm_limit_us, self.params.pwm_limit_us
         )
+
+    def _esc_latch(self, u_eff: np.ndarray) -> np.ndarray:
+        """Travamento direcional dos ESCs (caracterização da bancada).
+
+        Comportamento observado: comando pequeno num sentido (0 < u ≤
+        latch_us) TRAVA aquele sentido — comandos seguintes acima da faixa
+        não destravam; só um comando válido no sentido oposto (|u| >
+        latch_us) destrava. O µs COMANDADO segue igual (é o que o ESC
+        recebe e o que a telemetria mostra); o que zera é o empuxo de saída,
+        como no hardware. latch_us = 0 desativa o modelo do motor.
+
+        Observado a partir do repouso; se a esfera já está girando e o
+        comando decai através da faixa, o modelo (conservador) também trava
+        — a caracterização de bancada vai refinar isso.
+        """
+        out = u_eff.copy()
+        for i in range(self.N_THRUSTERS):
+            u = float(u_eff[i])
+            lim = self.motors[i].latch_us
+            if lim <= 0:
+                continue
+            if u > lim:
+                self._blocked[i, 1] = False  # comando válido à frente destrava a ré
+                if self._blocked[i, 0]:
+                    out[i] = 0.0
+            elif u < -lim:
+                self._blocked[i, 0] = False  # comando válido à ré destrava a frente
+                if self._blocked[i, 1]:
+                    out[i] = 0.0
+            elif u > 0.0:
+                self._blocked[i, 0] = True  # pequeno positivo trava a frente
+                out[i] = 0.0
+            elif u < 0.0:
+                self._blocked[i, 1] = True  # pequeno negativo trava a ré
+                out[i] = 0.0
+            # u == 0 (neutro exato): não trava nem destrava
+        return out
 
     def realize(
         self, force_world_des, yaw_us_des: float, heading: float, dt: float
@@ -336,7 +427,7 @@ class ThrusterCluster:
 
         u_swing = self.allocate_swing_us(force_body[:2])
         u_cmd = u_swing + self.yaw_signs * float(yaw_us_des)
-        u_eff = self._apply_lag_and_clamp(u_cmd, dt)
+        u_com, u_eff = self._actuate(u_cmd, dt)
 
         thrusts = self.force_from_us(u_eff)
         force_body_actual = self.T @ thrusts  # (2,)
@@ -348,13 +439,17 @@ class ThrusterCluster:
             force_world=force_world_actual,
             torque_heading=torque,
             thrusts=thrusts,
-            pwm_us=self.params.pwm_neutral_us + u_eff,
+            pwm_us=self.params.pwm_neutral_us + u_com,
         )
 
     def command_raw(self, u_offsets, heading: float, dt: float) -> ActuatorOutput:
-        """Comando bruto de µs por motor (wizard/testes), sem alocação."""
-        u_eff = self._apply_lag_and_clamp(
-            np.asarray(u_offsets, dtype=float), dt
+        """Comando bruto de µs por motor (wizard/testes), sem alocação.
+
+        Sem quantização anti-banda: o modelo do ESC (com travamento) fica
+        exposto de propósito — é por aqui que o wizard caracteriza a faixa.
+        """
+        u_com, u_eff = self._actuate(
+            np.asarray(u_offsets, dtype=float), dt, band_guard=False
         )
         thrusts = self.force_from_us(u_eff)
         rot = self.rotation_z(heading)
@@ -365,7 +460,7 @@ class ThrusterCluster:
             force_world=force_world,
             torque_heading=torque,
             thrusts=thrusts,
-            pwm_us=self.params.pwm_neutral_us + u_eff,
+            pwm_us=self.params.pwm_neutral_us + u_com,
         )
 
     # ---------------------------------------------------------- visualização

@@ -35,6 +35,7 @@ esfera real sobreposta na mesma tela.
 | Torção do cabo | **0** (heading livre, por gyro) | `RopeParams` | conforme hardware |
 | Força por hélice @ ±500 µs | **18 N** (curva quadrática, ré 60%, dz 30 µs) | `ActuatorParams` | **PROVISÓRIO — wizard calibra por motor** |
 | Faixa de PWM | **1500 ± 500 µs (faixa completa do ESC)** | `ActuatorParams.pwm_limit_us` / `PWM_LIMIT_US` | decisão da equipe — **verificar corrente/térmica dos F45A na 1ª sessão** |
+| Travamento direcional do ESC (latch) | **~±60 µs** (PWM ~1440–1560): comando pequeno trava o sentido, só comando válido no oposto destrava | `MotorCalib.latch_us` (Python) / `ESC_LATCH_US` (firmware) | observação de bancada — **wizard medirá por ESC** |
 | MPU6050 | topo da esfera, junto ao pino | firmware | inclinômetro quase ideal |
 
 **Autoridade resultante** (com os defaults provisórios): envelope de força
@@ -138,6 +139,13 @@ python wizard.py --sim            # valida contra o STM simulado
 python wizard.py --serial COM7    # bancada: esfera pendurada e LIVRE
 python wizard.py --tcp <rasp> --push
 ```
+
+**Mitigação do travamento do ESC já ativa** (paridade Python/firmware): o
+menor µs não-nulo comandado nasce FORA da faixa de travamento (latch + 15 µs
+de margem) — comandos sub-piso viram neutro, tanto no caminho de força (gate
+por motor) quanto no µs final (quantização anti-banda de swing+yaw). O
+caminho do wizard não quantiza de propósito: o modelo do ESC fica exposto
+para ser medido (rotina de caracterização do latch no wizard: planejada).
 
 Pulsa cada motor em ±100/170/240 µs (600 ms, loops desligados), mede a
 resposta pela própria telemetria e devolve **por motor**: direção de empuxo
