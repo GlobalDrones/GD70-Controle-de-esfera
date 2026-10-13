@@ -195,10 +195,12 @@ números de PWM na telemetria.
    ganhos;
 5. Pressione **K**: parada geral — os dois loops desligam e os PWMs voltam
    a 1500;
-6. Em um terminal serial qualquer (115200), digite `z` para calibrar a MPU.
-   Para testar a proteção contra movimento, repita a calibração **enquanto
-   alguém mexe na esfera**: ela deve se recusar e avisar. Esse é o "gate de
-   quietude" funcionando.
+6. Calibre a MPU (comando `z`) — com a esfera pendurada, parada e ninguém
+   encostando. Onde enviar: tecla **C** na janela do twin, ou `z` + Enter em
+   um `nc localhost 9999` aberto na Rasp (a resposta do STM volta no
+   terminal). Para testar a proteção contra movimento, repita a calibração
+   **enquanto alguém mexe na esfera**: ela deve se recusar e avisar. Esse é
+   o "gate de quietude" funcionando.
 
 **Como saber que deu certo:** todos os seis itens acima se comportam como
 descrito, sem nenhum movimento físico.

@@ -62,7 +62,8 @@ class TwinWindow(InteractiveWindow):
         )
         self.gains_text.set_text(
             self.gains_text.get_text()
-            + "\nTWIN: 1/2, Z/X, K e ganhos (+/−) vão TAMBÉM ao hardware"
+            + "\nTWIN: 1/2, Z/X, K, C (calibra MPU) e ganhos (+/−)"
+            + " vão TAMBÉM ao hardware"
         )
 
     # ------------------------------------------------------------ artistas
@@ -158,6 +159,10 @@ class TwinWindow(InteractiveWindow):
             self.session.controller.set_xy_enabled(False)
             self.session.controller.set_heading_enabled(False)
             self.session.cluster.reset()
+            return
+        elif key == "c":
+            # calibração da MPU no hardware (esfera parada no prumo!)
+            self._send("z")
             return
         super().on_press(event)
         if key in ("+", "-") and self.session.selected >= 1:

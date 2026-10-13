@@ -99,7 +99,8 @@ inclinação, heading, empuxos dos PWMs medidos), **linha de transmissão a
 distância D** abaixo da esfera (quando a visão enviar), **curvas real vs
 simulada** (inclinação, velocidade, heading, PWM) e HUD do lado real com
 conexão e estado dos loops. Os comandos vão aos dois lados: 1/2 (loops),
-Z/X (heading), K (parada geral) e +/− (ganhos, com push ao STM via G).
+Z/X (heading), K (parada geral), **C (calibração da MPU — esfera parada!)**
+e +/− (ganhos, com push ao STM via G).
 
 ### Arquitetura
 
