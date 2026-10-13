@@ -251,6 +251,25 @@ int16_t ler16() {
   return (int16_t)((hi << 8) | lo);
 }
 
+// ── Formatação de float SEM %f ──
+// A newlib-nano pode vir com printf de float desligado — nesse caso TODO %f
+// sai VAZIO (inteiros imprimem normal; já aconteceu na bancada). Escalamos
+// para inteiro e formatamos na mão: o resultado ("12.34") é idêntico para o
+// parser do twin/Rasp. Serial.print(float) do Arduino não usa printf e não
+// é afetado. Onde houver %f no futuro... não haja: use estas.
+void fmt_f2(char *out, float v) {
+  bool neg = v < 0;
+  if (neg) v = -v;
+  long iv = (long) lroundf(v * 100.0f);
+  snprintf(out, 16, "%s%ld.%02ld", neg ? "-" : "", iv / 100, iv % 100);
+}
+void fmt_f3(char *out, float v) {
+  bool neg = v < 0;
+  if (neg) v = -v;
+  long iv = (long) lroundf(v * 1000.0f);
+  snprintf(out, 16, "%s%ld.%03ld", neg ? "-" : "", iv / 1000, iv % 1000);
+}
+
 // =========================================================================================
 // --- PID COM ANTI-WINDUP (espelha pid_controller.py) ---
 // =========================================================================================
@@ -914,19 +933,23 @@ void enviar_telemetria() {
   unsigned flags = (yaw_ativo ? 1 : 0) | (anti_balanco_ativo ? 2 : 0) |
                    (calib_ok ? 4 : 0) | (vision_fresh() ? 8 : 0) |
                    (wizard_motor >= 0 ? 16 : 0);
-  char line[160];
-  snprintf(line, sizeof(line),
-    "TEL,%lu,%.2f,%.2f,%.2f,%.2f,%.3f,%.3f,%.3f,%.3f,%d,%d,%d,%.2f,%.2f,%u",
-    millis(),
-    yaw_gyro,
-    vision_fresh() ? vision_bearing : 0.0f,
-    desired_yaw,
-    rate_z_filt,
-    sx_est * 57.2958f, sy_est * 57.2958f,
-    wx_est * 57.2958f, wy_est * 57.2958f,
-    esc_us_atual[0], esc_us_atual[1], esc_us_atual[2],
-    L_M, vision_fresh() ? vision_D : -1.0f,
-    flags);
+  // Montada campo a campo com fmt_f2/fmt_f3 — nunca %f (ver nota junto às
+  // funções). Mesmo formato de sempre para o twin/Rasp.
+  char line[192], num[16];
+  int n = snprintf(line, sizeof(line), "TEL,%lu,", millis());
+  fmt_f2(num, yaw_gyro);                                 n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f2(num, vision_fresh() ? vision_bearing : 0.0f);   n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f2(num, desired_yaw);                              n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f2(num, rate_z_filt);                              n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f3(num, sx_est * 57.2958f);                        n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f3(num, sy_est * 57.2958f);                        n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f3(num, wx_est * 57.2958f);                        n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f3(num, wy_est * 57.2958f);                        n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  n += snprintf(line + n, sizeof(line) - n, "%d,%d,%d,",
+                esc_us_atual[0], esc_us_atual[1], esc_us_atual[2]);
+  fmt_f2(num, L_M);                                      n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  fmt_f2(num, vision_fresh() ? vision_D : -1.0f);        n += snprintf(line + n, sizeof(line) - n, "%s,", num);
+  snprintf(line + n, sizeof(line) - n, "%u", flags);
   Serial.println(line);
   Serial2.println(line);
 }
