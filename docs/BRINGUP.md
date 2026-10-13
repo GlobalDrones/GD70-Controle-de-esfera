@@ -271,6 +271,18 @@ pip install -r Raspberry/requirements.txt
 python Raspberry/main.py
 ```
 
+**Atenção ao rodar por SSH:** o aplicativo de visão abre uma janela com as
+imagens — por SSH puro, sem tela associada, ele aborta com um erro do Qt
+(`could not connect to display`). Duas saídas: rodar no terminal da própria
+Rasp (teclado e monitor ligados nela), ou continuar no SSH mandando a janela
+para o monitor da Rasp:
+
+```bash
+DISPLAY=:0 python Raspberry/main.py
+```
+
+(Não use `ssh -X` para isso — vídeo por túnel X fica lento demais.)
+
 No seu computador:
 
 ```bash
