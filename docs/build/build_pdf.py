@@ -305,7 +305,7 @@ story.append(PageBreak())
 
 # ══════════════════════════════════ CAP 1 ══════════════════════════════════
 H("1. Números-chave", 0)
-P("Valores vigentes no repositório (commit <b>d0593cb</b>). Parâmetros marcados como "
+P("Valores vigentes no repositório (commit <b>8e434ea</b>). Parâmetros marcados como "
   "provisórios são substituídos pela calibração do wizard.")
 add_table(
     ["Parâmetro", "Valor", "Origem/estado"],
@@ -335,24 +335,28 @@ add_table(
 # ══════════════════════════════════ CAP 2 ══════════════════════════════════
 H("2. Arquitetura e referenciais", 0)
 H("2.1 Quem conversa com quem", 1)
-figure("arquitetura.png", "Figura 2.1 — Topologia real: a USB só existe na bancada de flash; "
-       "em campo, a única porta do STM é a Serial2, via Rasp.")
-P("O firmware é configurado e gravado no PC (USB) e, em seguida, o STM vai para a placa da "
-  "esfera — <b>a partir daí a única comunicação é a Serial2</b> (PA2/PA3, 115200 baud), "
-  "conectada à Raspberry Pi. Na Rasp roda o agente (<b>rasp/agent.py</b> como serviço "
-  "systemd): publica tudo o que chega da Serial2 por TCP na porta 9999, para múltiplos "
-  "clientes, e encaminha ao STM o que os clientes enviarem. O posto de operação é o "
-  "próprio teclado/mouse da Rasp (terminal local) e, pela rede, o SSH/remote desktop e o "
-  "twin no PC (python -m twin --tcp).")
-P("Dois detalhes práticos dessa topologia: (1) como o agente ocupa a porta serial, no "
-  "terminal da Rasp fala-se com o STM <b>através dele</b> — nc localhost 9999 dá a mesma "
-  "linha de comando; (2) tudo o que importa em operação é ajustável sem reflashing — ganhos "
-  "(G/R), calibração por motor (M, via wizard --push), L da sessão, heading e visão. Flash "
-  "só é preciso para mudar a lei de controle ou constantes compiladas.")
+figure("arquitetura.png", "Figura 2.1 — Topologia em campo: o app de visão da Rasp é o "
+       "único dono da serial USB do STM e serve a ponte TCP 9999; a bancada dispensa a "
+       "Rasp (STM na USB do PC).")
+P("Em campo, o STM conversa pela <b>USB com a Raspberry Pi</b> — o <b>app de visão</b> "
+  "(Raspberry/main.py) é o único dono dessa serial: processa as câmeras estéreo, detecta "
+  "o cabo da linha, alimenta o HUD local e envia a visão ao STM (contrato V, Cap. 9.4). "
+  "Embutida no app roda a <b>ponte TCP</b> (Raspberry/bridge.py, porta 9999): tudo o que o "
+  "STM transmite vai ao twin/wizard no PC, e os comandos deles voltam pela mesma serial. "
+  "O app também cuida do <b>reset físico do STM</b> (GPIO18, executado no boot limpo "
+  "antes de abrir a serial) e lê o <b>rádio RC</b> (canais CH12–15 → pinça/polia).")
+P("Na bancada de flash/testes a Rasp não é necessária: o STM pluga na USB do PC e "
+  "twin/wizard usam --serial. A Serial2 (PA2/PA3) permanece configurada no firmware como "
+  "link alternativo. No terminal da própria Rasp, a linha de comandos do STM segue "
+  "disponível através da ponte: nc localhost 9999. Tudo que importa em operação é "
+  "ajustável sem reflashing — ganhos (G/R), calibração por motor (M, via wizard --push), "
+  "L da sessão, heading e visão; flash só para mudar lei de controle ou constantes "
+  "compiladas. Para o primeiro bring-up, siga docs/BRINGUP.md (etapas com motores por "
+  "último).")
 H("2.2 Referenciais e convenção de eixos", 1)
 bullets([
-    "<b>Corpo</b> = referencial do sensor (MPU6050 + futuras câmeras), que gira com o heading. "
-    "É o referencial em que os empuxos dos motores são definidos.",
+    "<b>Corpo</b> = referencial do sensor (MPU6050 + câmeras estéreo), que gira com o "
+    "heading. É o referencial em que os empuxos dos motores são definidos.",
     "<b>Mundo</b> = referencial fixo vertical. A força de controle é calculada aqui e girada "
     "para o corpo por R<sub>z</sub>(−ψ) antes da alocação nos motores.",
     "Motor <b>a</b> (BF, pino PA0) empurra no <b>+X do sensor</b> — verificado fisicamente. "
@@ -405,9 +409,14 @@ bullets([
     "participam do controle automático).",
 ])
 H("3.3 Raspberry Pi", 1)
-P("A Rasp tem SSH e saída de vídeo para o monitor: é o posto de operação em campo. Nela roda "
-  "o <b>agente</b> (rasp/agent.py como serviço systemd) e, no futuro, o processamento das "
-  "câmeras. O PC se comunica com ela por SSH (deploy e túnel) e com o STM pelo TCP do agente.")
+P("A Rasp tem SSH e saída de vídeo para o monitor: é o posto de operação em campo. Nela "
+  "roda o <b>app de visão</b> (Raspberry/main.py): duas câmeras USB (720p) com retificação "
+  "estéreo calibrada, mapa de disparidade SGBM + filtro WLS, detecção do cabo por Hough "
+  "com seleção por profundidade, HUD com telemetria e teclado local, reset físico do STM "
+  "(GPIO18), leitura do rádio RC (CH12–15, com debounce e arming) e a ponte TCP embutida "
+  "para o twin/wizard no PC. O modo mono (uma câmera só) mantém o bearing sem a "
+  "profundidade D. Dependências em Raspberry/requirements.txt — atenção: o filtro WLS "
+  "exige o pacote <b>opencv-contrib</b>.")
 
 # ══════════════════════════════════ CAP 4 ══════════════════════════════════
 H("4. O firmware: o que roda no STM", 0)
@@ -568,8 +577,8 @@ code([
     "                 [--calib calib.json] [--save saida.gif]",
     "python -m twin  --sim | --serial COM7 | --tcp 192.168.0.50[:9999]  [--scenario ...]",
     "python wizard.py --sim | --serial COM7 | --tcp HOST [--out calib.json] [--push]",
-    "python rasp/agent.py --port /dev/serial0 --tcp 9999        # na Raspberry Pi",
-    "python -m pytest tests/ -q                                 # 44 testes",
+    "python3 Raspberry/main.py      # na Rasp, a partir da raiz do repo (visão + ponte)",
+    "python -m pytest tests/ -q     # 48 testes (+1 do bearing roda com cv2 instalado)",
 ])
 
 # ══════════════════════════════════ CAP 6 ══════════════════════════════════
@@ -579,8 +588,8 @@ add_table(
     ["#", "Etapa", "Comando/procedimento", "Quando fazer (frequência/gatilho)"],
     [
         ["1", "Flash + smoke test", "compilar e gravar firmware/main.cpp no PC (USB), abrir a "
-         "serial e conferir banner + boot com loops OFF. Depois instalar o STM na esfera: a "
-         "USB acaba aí — em campo só há Serial2 via Rasp",
+         "serial e conferir banner + boot com loops OFF. Sequência completa de bring-up em "
+         "etapas (ESCs desligados até a etapa 5): docs/BRINGUP.md",
          "uma vez por versão do firmware (exige buscar o STM)"],
         ["2", "Teste de motores", "'m' — confirmar a↔PA0/b↔PA15/c↔PA1 e os sentidos de giro",
          "após montar/mexer na fiação dos motores"],
@@ -755,40 +764,38 @@ H("9.1 Transportes e como escolher", 1)
 add_table(
     ["Transporte", "Comando", "Quando usar"],
     [
-        ["Serial USB direta", "python -m twin --serial COM7", "bancada de flash: zero rede, "
-         "zero configuração. Em campo não existe — a USB fica no PC de flash"],
-        ["TCP via agente na Rasp", "python -m twin --tcp 192.168.0.50[:9999]",
-         "operação real: o PC alcança a Rasp na rede (LAN, hotspot da Rasp) e o agente "
-         "ponteia a Serial2"],
+        ["Serial USB direta", "python -m twin --serial COM7", "bancada de flash/testes: "
+         "STM na USB do PC, zero rede, zero configuração"],
+        ["TCP via ponte do app de visão", "python -m twin --tcp 192.168.0.50[:9999]",
+         "operação real: o PC alcança a Rasp na rede (LAN, hotspot, túnel) e a ponte "
+         "embutida no app de visão serve a serial USB do STM"],
         ["Túnel SSH", "ssh -L 9999:localhost:9999 pi@<rasp> e depois --tcp 127.0.0.1:9999",
          "quando o PC não alcança a Rasp por IP direto"],
         ["Terminal da própria Rasp", "nc localhost 9999 (teclado/mouse/monitor da Rasp)",
-         "sem PC nenhum: a mesma linha de comandos, através do agente"],
+         "sem PC nenhum: a mesma linha de comandos, através da ponte do app de visão"],
         ["STM simulado", "python -m twin --sim", "desenvolver/treinar sem hardware; mesma "
          "planta, atuadores, controlador e protocolo"],
     ],
     [0.24, 0.42, 0.34],
     "Tabela 9.1 — Transportes do twin.",
 )
-H("9.2 Deploy do agente na Raspberry Pi", 1)
+H("9.2 Deploy na Raspberry Pi", 1)
 code([
-    "scp -r rasp/ pi@<rasp>:esfera/",
-    "ssh pi@<rasp> 'pip3 install pyserial",
-    "                sudo cp esfera/esfera-agent.service /etc/systemd/system/",
-    "                sudo systemctl enable --now esfera-agent'",
+    "git clone https://github.com/iNeewbie/esfera.git && cd esfera",
+    "pip3 install -r Raspberry/requirements.txt   # opencv-CONTRIB (WLS), pyserial, gpiozero",
+    "python3 Raspberry/main.py                    # a partir da raiz do repo",
 ])
-P("O agente (rasp/agent.py) lê a Serial2 do STM, publica as linhas por TCP na porta 9999 "
-  "para múltiplos clientes (twin, wizard, netcat) e encaminha aos clientes o que a serial "
-  "manda; comandos digitados por qualquer cliente vão ao STM. Como o agente ocupa a porta "
-  "serial, no terminal da Rasp não se abre screen/minicom direto — o caminho é "
-  "nc localhost 9999 (ou parar o serviço se precisar da serial exclusiva). O wizard também "
-  "roda na Rasp sem PC: python wizard.py --tcp localhost:9999 --push.")
-P("Sobre o remote desktop sem HDMI (VNC/RDP headless): ótimo para terminais, o agente e, no "
-  "futuro, a visão; rode porém a <b>janela do twin no PC</b> via --tcp, pois animação "
-  "matplotlib sobre remote desktop fica arrastada, e o teclado de atalhos do twin está no PC "
-  "de qualquer forma. Nota de segurança: quem controla a Rasp controla a esfera; proteja o "
-  "SSH (chave/senha forte) e lembre que o k (parada geral) funciona de qualquer cliente "
-  "conectado, inclusive do terminal local da Rasp se a rede cair.")
+P("O app de visão é o <b>único dono da serial USB do STM</b> (auto-scan de /dev/ttyUSB* e "
+  "/dev/ttyACM*, 115200). No boot ele pulsa o reset físico do STM (GPIO18) para um estado "
+  "limpo, abre a serial e sobe a ponte TCP na porta 9999. Toda linha do STM vai aos "
+  "clientes TCP (twin, wizard, nc); comandos de qualquer cliente voltam ao STM. No "
+  "terminal da Rasp não se abre screen/minicom direto — o caminho é nc localhost 9999. "
+  "O wizard também roda na própria Rasp: python wizard.py --tcp localhost:9999 --push.")
+P("Sobre o remote desktop sem HDMI (VNC/RDP headless): ótimo para a janela do app de "
+  "visão e terminais; rode porém a <b>janela do twin no PC</b> via --tcp, pois animação "
+  "matplotlib sobre remote desktop fica arrastada. Nota de segurança: quem controla a "
+  "Rasp controla a esfera; proteja o SSH (chave/senha forte) e lembre que o k (parada "
+  "geral) funciona de qualquer cliente conectado.")
 H("9.3 A janela do twin", 1)
 bullets([
     "<b>Esfera fantasma</b> (cinza, tracejada): estado REAL da telemetria — inclinação, "
@@ -800,14 +807,21 @@ bullets([
     "<b>Comandos aos dois lados</b>: 1/2 (loops), Z/X (heading), K (parada geral) e ganhos "
     "+/− com push ao STM. Setas e Q/E ficam só na simulação (perturbações preditivas).",
 ])
-H("9.4 Contrato da visão (para quem for implementar as câmeras)", 1)
+H("9.4 O contrato da visão (IMPLEMENTADO no app da Rasp)", 1)
 P("As câmeras ficam fixas ao sensor (giram com a esfera) e olham <b>para baixo</b>, para o "
-  "cabo da linha. A Rasp processa as imagens e envia ao STM, pela Serial2: "
-  "<b>V<bearing_graus> <D_metros></b>. O bearing do cabo no referencial da câmera "
-  "É o erro de apontamento (imune à deriva do gyro, por construção); o STM o usa como erro "
-  "direto enquanto estiver fresco (< 500 ms). A distância D estereoscópica não entra no "
-  "controle — viaja na telemetria para o twin desenhar a linha e para a interface de "
-  "aproximação do operador.")
+  "cabo da linha. A cada frame com linha detectada (tecla <b>v</b> liga/desliga o envio), "
+  "o app envia ao STM: <b>V&lt;bearing&gt; &lt;D&gt;</b> — o bearing do cabo no referencial "
+  "da câmera, <b>com sinal</b>, normalizado em (−90°, 90°], mais a distância estereoscópica "
+  "D (−1 no modo mono). O bearing É o erro de apontamento (imune à deriva do gyro, por "
+  "construção — câmeras fixas ao sensor); o STM o usa como erro direto enquanto fresco "
+  "(< 500 ms). A distância D viaja na telemetria: o twin desenha a linha abaixo da esfera "
+  "e o operador a usa na aproximação.")
+callout("O SINAL do bearing é validação de bancada (etapa 8 do BRINGUP): a cadeia "
+        "visão→yaw nunca fechou no firmware antigo (o PID de heading estava morto), então "
+        "não existe convenção já provada. Se a esfera girar para o lado errado ao alinhar "
+        "com o alvo, inverta o sinal no envio — uma linha em Raspberry/main.py.",
+        color=SEM_WARNING, title="Pendência de bancada: sentido do bearing",
+        bg=colors.HexColor('#f4efe4'))
 
 # ══════════════════════════════════ CAP 10 ══════════════════════════════════
 H("10. Configurações avançadas", 0)
@@ -830,8 +844,9 @@ add_table(
          "confiança no gyro, menos no acc"],
         ["ACC_GATE_LO / HI", "0,8 / 1,2 g", "janela de aceitação do acelerômetro; estreitar "
          "se a vibração passar"],
-        ["LEAD_S (lag do modelo)", "0,12 s", "atraso de atuação usado pelo simulador/wizard — "
-         "substituir pelo valor medido (Cap. 7.4)"],
+        ["LEAD_S / lag_tau", "—  / 0,12 s", "atraso de atuação do MODELO (actuators.py no "
+         "Python; o firmware não modela — o hardware o tem de verdade). Substituir pelo "
+         "valor medido (Cap. 7.4)"],
     ],
     [0.28, 0.16, 0.56],
     "Tabela 10.1 — Principais constantes.",
@@ -889,9 +904,13 @@ add_table(
         ["Motores alternam de lado em regime permanente", "comando ruído em torno de zero + "
          "alocação redistribuindo", "aceitável dentro da banda; se incomodar, a política do "
          "Cap. 10.5 resolve"],
-        ["Telemetria não aparece", "serial/baud errados; agente parado; porta ocupada pelo "
-         "agente", "conferir 115200 e a porta; systemctl status esfera-agent; na Rasp usar "
-         "nc localhost 9999 (não abrir a serial direto — o agente a ocupa)"],
+        ["Telemetria não aparece", "serial/baud errados; app de visão parado na Rasp; porta "
+         "ocupada por outro processo", "conferir 115200 e a porta; na Rasp, o app de visão "
+         "precisa estar rodando (ele é o dono da serial); usar nc localhost 9999 — nunca "
+         "abrir a serial direto"],
+        ["Esfera gira para o lado errado ao alinhar com a linha", "sinal do bearing "
+         "invertido (convenção nunca validada no firmware antigo)", "inverter o sinal no "
+         "envio (uma linha em Raspberry/main.py); ver Cap. 9.4"],
         ["[ERRO] MPU em movimento ao calibrar", "gate de quietude detectou movimento",
          "esperar a esfera parar de verdade e repetir 'z'"],
         ["AS5600 não encontrado", "fiacao/barramento I2C",
@@ -991,7 +1010,7 @@ content = {
     "summary": ("Manual completo do pêndulo esférico controlado: hardware e conexões, "
                 "firmware do STM32, referência de comandos, calibrações (wizard por motor), "
                 "procedimentos de bancada e o digital twin em tempo real."),
-    "meta": "Equipe Esfera · firmware v2 · repositório: commit d0593cb",
+    "meta": "Equipe Esfera · firmware v2 · repositório: commit 8e434ea",
     "footer": "ESFERA · GUIA-01",
     "year": "2026",
     "word": "GUIA",

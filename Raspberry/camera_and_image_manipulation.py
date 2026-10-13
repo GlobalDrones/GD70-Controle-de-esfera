@@ -1,14 +1,7 @@
 import cv2
 import numpy as np
-import os
-import sys
-import time
-import threading
-from collections import deque
-import serial
-import subprocess
-from serial_communication import *
-from gpiozero import LED # Controle seguro do pino de reset na Raspberry Pi 5
+
+from serial_communication import telemetria_dados  # noqa: F401  (HUD lê o dict)
 
 # ===========================================================================
 # RETIFICACAO
