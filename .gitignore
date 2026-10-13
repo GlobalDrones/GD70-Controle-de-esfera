@@ -6,5 +6,7 @@ __pycache__/
 .venv/
 dist/
 out/
+docs/_body.pdf
+docs/_cover.pdf
 .DS_Store
 Thumbs.db

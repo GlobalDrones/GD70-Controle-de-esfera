@@ -1,0 +1,948 @@
+// =========================================================================================
+//  PROJETO ESFERA SUSPENSA - FIRMWARE INTEGRADO STM32F4 (BLACK PILL)
+//  Controle de Yaw (PID Original) + Anti-Balanco Ativo (3 Propulsores a 120 Graus)
+//  + Mecanismo da Polia (BTS7960) + Mecanismo da Pinca (BTS7960) + Encoder AS5600
+//  + Sensor Optico de Olhal (LM393) + Telemetria Dupla (USB e Serial2 / Raspberry Pi)
+//  + [NOVO/FIX] Fusao Sensorial Gravimetrica (atan2) para Medicao Real de Inclinacao
+//  + [NOVO/FIX] Parametros e Ganhos Sintonizados para a Esfera Real de 12 kg
+// =========================================================================================
+
+#include <Arduino.h>
+#include <Wire.h>
+#include <Servo.h>
+#include <AS5600.h> // Biblioteca dedicada do AS5600
+
+// [MANTIDO - CONFIGURACOES ORIGINAIS DO YAW]
+#define DEADZONE 3
+#define ESC_MIN_POWER 80
+
+// [MANTIDO - LIMITES ABSOLUTOS DE PWM DOS MOTORES]
+#define LIMIT_PWM_MAX 1750  // 1500 + 250 us (Seguranca para nao sobrecarregar ESC)
+#define LIMIT_PWM_MIN 1250  // 1500 - 250 us (Seguranca para nao sobrecarregar ESC)
+#define ESC_NEUTRAL   1500
+
+// [NOVO] Delta de PWM para o teste de identificacao dos motores (1500 +- 120 us)
+#define PWM_TEST_DELTA 120  // 1620 us (horario) e 1380 us (anti-horario) - velocidade segura
+
+// [NOVO - SINTONIA DO ANTI-BALANCO PARA 12 KG]
+// Com 12 kg, o controle atua focado no amortecimento derivativo (freio aerodinamico viscoso)
+// para drenar a energia de oscilacao sem saturar precocemente os motores
+#define KP_SWING 1.2f       // Ganho proporcional [N/rad] (centralizacao suave)
+#define KD_SWING 8.5f       // Ganho derivativo antecipativo [N.s/rad] (avanco de fase / freio ativo)
+#define ALPHA_FUSAO 0.88f   // Reduz atraso de fase de 245 ms para ~38 ms (6x mais rapido)
+
+// =========================================================================================
+// --- MAPEAMENTO DE PINOS (BLACK PILL STM32F401 / F411) ---
+// =========================================================================================
+// [ATUALIZADO CONFORME TESTE FISICO NA BANCADA]
+#define BF_PIN PA0   // Motor 1: Braco Superior (Frente, 0 graus)
+#define AS_PIN PA15  // Motor 2: Braco Inferior Esquerdo (Asa Esquerda, +120 graus)
+#define TR_PIN PA1   // Motor 3: Braco Inferior Direito (Traseira Direita, -120 graus)
+
+// [MANTIDO - PONTE H1 POLIA BTS7960]
+#define POLIA_EN_R_PIN  PB7
+#define POLIA_EN_L_PIN PB10
+#define POLIA_RPWM_PIN  PB6  
+#define POLIA_LPWM_PIN  PB5
+
+// [MANTIDO - PONTE H2 PINCA BTS7960]
+#define PINCA_EN_R_PIN   PB12
+#define PINCA_EN_L_PIN   PB13
+#define PINCA_RPWM_PIN   PA7
+#define PINCA_LPWM_PIN   PB0
+
+// [MANTIDO - FINS DE CURSO DA PINCA]
+#define FIM_CURSO_CIMA  PB14
+#define FIM_CURSO_BAIXO PB15
+
+// [MANTIDO - SENSOR OPTICO DE OLHAL (LM393)]
+#define SENSOR_OLHAL_D0 PA5 // Conectado ao pino D0 do sensor (leitura digital com debounce)
+#define SENSOR_OLHAL_A0 PA6 // Conectado ao pino A0 do sensor
+
+// [MANTIDO - BARRAMENTO I2C1 (AS5600 + MPU6050)]
+#define AS5600_SDA PB9
+#define AS5600_SCL PB8
+
+// [MANTIDO - LED ONBOARD (Black Pill - Active LOW)]
+#define LED_PIN PC13
+
+#define MPU6050_ADDR 0x68
+#define SAMPLES_GYRO 500
+
+// =========================================================================================
+// [ATUALIZADO] CONSTANTES E PARAMETROS REAIS DA PLANTA (ESFERA DE 12 KG)
+// =========================================================================================
+const float G_ACC        = 9.80665f;
+const float M_KG         = 12.0f;    // Massa total da esfera real suspensa [kg]
+const float R_ESF        = 0.60f;    // Raio da esfera [m] (diametro de 1.20 m)
+const float I_ESF        = 1.728f;   // Inercia propria da esfera: 0.4 * M * R^2 [kg*m^2]
+const float ZETA_N       = 0.02f;    // Amortecimento pendular natural (~2%)
+const float R_P          = 0.70f;    // Raio do eixo central aos propulsores [m]
+const float SWING_US_MAX = 240.0f;   // Excursao maxima reservada para o anti-balanco [us] (+-240 us de forca)
+const float DB_US        = 30.0f;    // Zona morta do ESC [us]
+const float F_DEADZONE   = 0.003f;   // Forca minima para acionamento [N]
+const float F_MIN_TOTAL  = 0.01f;    // Limiar minimo de histerese anti-chattering [N]
+
+// Constantes de empuxo dos motores (curva quadratica real dos ESCs bidirecionais)
+const float F_MAX_500    = 3.9f;     // Forca maxima a 500 us de excursao [N] (~400 gf)
+const float REV_RATIO    = 0.60f;    // Eficiencia de reverso (60%)
+const float KF_FWD       = F_MAX_500 / ((500.0f - DB_US) * (500.0f - DB_US));
+const float KF_REV       = KF_FWD * REV_RATIO;
+
+// [ATUALIZADO CONFORME TESTE FISICO] Sentidos tangenciais de rotacao
+const float DIR_BF       =  1.0f;    // PA0 (Superior): Normal (+1.0)
+const float DIR_AS       =  1.0f;    // PA15 (Inferior Esquerdo): Normal (+1.0)
+const float DIR_TR       = -1.0f;    // PA1 (Inferior Direito): Invertido (-1.0)
+
+// Parametros do cabo e limites operacionais
+const float L_MIN = 0.5f;
+const float L_MAX = 6.0f;
+float L_M         = 1.0f;            // Comprimento nominal padrao do cabo [m]
+
+// =========================================================================================
+// OBJETOS E VARIAVEIS GLOBAIS
+// =========================================================================================
+AS5600 encoder;
+
+Servo esc_bf;
+Servo esc_as;
+Servo esc_tr;
+
+// [MANTIDO] Estados dos Mecanismos
+int estadoMotor = 0; // 1 = Subindo, -1 = Descendo, 0 = Parado
+bool bateuCima  = false;
+bool bateuBaixo = false;
+
+// [MANTIDO] Debounce do Sensor Optico do Olhal
+int estadoEstavelOlhal       = HIGH;    
+int ultimoEstadoFisicoOlhal   = HIGH;
+unsigned long ultimoTempoFiltro = 0;
+const unsigned long tempoFiltro = 100;
+
+// [MANTIDO] Variaveis do Controle de Yaw (PID Original da Bancada)
+int16_t gyro_z_raw;
+float gyro_offset_x = 0;
+float gyro_offset_y = 0;
+float gyro_offset_z = 0;
+float acc_offset_x  = 0;
+float acc_offset_y  = 0;
+float acc_offset_z  = 0;
+
+// Offsets de angulo de repouso (ajustados no calibrate_gyro ou comando 'z')
+float theta_offset_x = 0.0f;
+float theta_offset_y = 0.0f;
+
+float filtered_gyro_rate = 0;
+float alpha = 0.2f;
+float yaw_gyro = 0;
+float desired_yaw = 0;
+float intensidade_mult = 1.0f;
+float pos_error = 0;
+float yaw_output = 0;
+float integral_error_yaw = 0;
+float last_error_yaw = 0;
+
+unsigned long last_time;
+unsigned long last_telemetry_time = 0;
+const unsigned long TELEMETRY_INTERVAL = 100; // 10 Hz
+
+// [NOVO - FUSAO GRAVIMETRICA REAL] Variaveis de Estado da Inclinacao
+float sx_est = 0.0f; // Inclinacao estimada no eixo X do corpo [rad]
+float sy_est = 0.0f; // Inclinacao estimada no eixo Y do corpo [rad]
+float ux_est = 0.0f; // Velocidade angular de balanco em X [rad/s]
+float uy_est = 0.0f; // Velocidade angular de balanco em Y [rad/s]
+
+bool  yaw_ativo          = true;  // Inicia ligado por padrao (comando 'y' ativa/desativa)
+bool  anti_balanco_ativo = false; // Inicia desligado por seguranca no boot (comando 'p')
+bool  sw_hysteresis_on   = false;
+float F_cmd_x = 0.0f;             // Forca de controle em X do corpo [N]
+float F_cmd_y = 0.0f;             // Forca de controle em Y do corpo [N]
+float theta_total_deg = 0.0f;     // Balanco total resultante [graus]
+
+unsigned long last_swing_micros = 0;
+const unsigned long SWING_INTERVAL_US = 5000; // 200 Hz para a malha do pendulo
+
+// Medicao do periodo natural para calibracao de L
+float periodo_medido = 0;
+unsigned long ultimo_cruzamento_us = 0;
+bool cruzamento_armado = false;
+
+// =========================================================================================
+// FUNCOES AUXILIARES MATEMATICAS
+// =========================================================================================
+float angle_diff(float a, float b) {
+    float d = a - b;
+    while (d > 180.0f)  d -= 360.0f;
+    while (d < -180.0f) d += 360.0f;
+    return d;
+}
+
+int16_t ler16() {
+    uint8_t hi = Wire.read();
+    uint8_t lo = Wire.read();
+    return (int16_t)((hi << 8) | lo);
+}
+
+// =========================================================================================
+// [MANTIDO] FUNCAO DO ENCODER MAGNETICO AS5600 (MECANISMO DA POLIA)
+// =========================================================================================
+void lerEncoderAS5600() {
+    if (encoder.isConnected()) {
+        int anguloBruto = encoder.readAngle();
+        float graus = (anguloBruto / 4095.0f) * 360.0f;
+        Serial.print(">> AS5600 - Angulo Bruto: ");
+        Serial.print(anguloBruto);
+        Serial.print(" | Graus: ");
+        Serial.println(graus, 2);
+    } else {
+        Serial.println("[ERRO] AS5600 nao encontrado! Verifique a fiacao I2C.");
+    }
+}
+
+// =========================================================================================
+// [MANTIDO] FUNCOES DE CONTROLE DA PINCA (BTS7960 #2)
+// =========================================================================================
+void pararMotor() {    
+    digitalWrite(PINCA_RPWM_PIN, LOW);
+    digitalWrite(PINCA_LPWM_PIN, LOW);
+    estadoMotor = 0;
+    Serial.println(">> PINCA: Motor PARADO");
+}
+
+void moverSubir() {    
+    digitalWrite(PINCA_EN_R_PIN, HIGH);
+    digitalWrite(PINCA_EN_L_PIN, HIGH);
+    digitalWrite(PINCA_RPWM_PIN, HIGH);    
+    digitalWrite(PINCA_LPWM_PIN, LOW);
+    estadoMotor = 1;
+    Serial.println(">> PINCA: SUBINDO");
+}
+
+void moverDescer() {    
+    digitalWrite(PINCA_EN_R_PIN, HIGH);
+    digitalWrite(PINCA_EN_L_PIN, HIGH);
+    digitalWrite(PINCA_RPWM_PIN, LOW);    
+    digitalWrite(PINCA_LPWM_PIN, HIGH);
+    estadoMotor = -1;
+    Serial.println(">> PINCA: DESCENDO");
+}
+
+// =========================================================================================
+// [MANTIDO] FUNCOES DE CONTROLE DA POLIA (BTS7960 #1)
+// =========================================================================================
+void desativarDriver() {
+    digitalWrite(POLIA_EN_R_PIN, LOW);
+    digitalWrite(POLIA_EN_L_PIN, LOW);
+}
+
+void ativarDriver() {
+    digitalWrite(POLIA_EN_R_PIN, HIGH);
+    digitalWrite(POLIA_EN_L_PIN, HIGH);
+}
+
+void pararBTS() {
+    digitalWrite(POLIA_RPWM_PIN, LOW);
+    digitalWrite(POLIA_LPWM_PIN, LOW);
+    digitalWrite(LED_PIN, HIGH);
+    Serial.println(">> POLIA: Motor PARADO");
+}
+
+void girarSentidoA() {
+    ativarDriver();
+    digitalWrite(POLIA_RPWM_PIN, HIGH);
+    digitalWrite(POLIA_LPWM_PIN, LOW);
+    digitalWrite(LED_PIN, LOW);
+    Serial.println(">> POLIA: Girando SENTIDO A (Horario)");
+}
+
+void girarSentidoD() {
+    ativarDriver();
+    digitalWrite(POLIA_RPWM_PIN, LOW);
+    digitalWrite(POLIA_LPWM_PIN, HIGH);
+    digitalWrite(LED_PIN, LOW);
+    Serial.println(">> POLIA: Girando SENTIDO D (Anti-horario)");
+}
+
+// =========================================================================================
+// [MANTIDO / EXPANDIDO] ROTINAS DA MPU6050 (I2C)
+// =========================================================================================
+void destravar_barramento_I2C() {
+    pinMode(AS5600_SCL, OUTPUT);      
+    pinMode(AS5600_SDA, INPUT_PULLUP);
+    for (int i = 0; i < 9; i++) {
+        digitalWrite(AS5600_SCL, LOW);
+        delayMicroseconds(5);
+        digitalWrite(AS5600_SCL, HIGH);
+        delayMicroseconds(5);
+    }
+    pinMode(AS5600_SDA, OUTPUT);
+    digitalWrite(AS5600_SDA, LOW);
+    delayMicroseconds(5);
+    digitalWrite(AS5600_SCL, HIGH);
+    delayMicroseconds(5);
+    digitalWrite(AS5600_SDA, HIGH);
+}
+
+void init_mpu() {
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x6B); // Power Management 1
+    Wire.write(0x00); // Wake up
+    Wire.endTransmission();
+
+    // Configura fundo de escala do Gyro: +-250 deg/s (131 LSB/deg/s)
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x1B);
+    Wire.write(0x00);
+    Wire.endTransmission();
+
+    // Configura fundo de escala do Accel: +-2g (16384 LSB/g)
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x1C);
+    Wire.write(0x00);
+    Wire.endTransmission();
+
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x37); // INT Pin / Bypass Enable
+    Wire.write(0x02);
+    Wire.endTransmission();
+}
+
+void calibrate_gyro() {
+    Serial.println("=== CALIBRANDO GYRO E ACELEROMETRO ===");
+    for(int j = 0; j < 10; j++) {
+        digitalWrite(LED_PIN, HIGH); delay(100);
+        digitalWrite(LED_PIN, LOW); delay(100);
+    }
+    long sum_gx = 0, sum_gy = 0, sum_gz = 0;
+    long sum_ax = 0, sum_ay = 0, sum_az = 0;
+    bool calib_led = false;
+
+    for (int i = 0; i < SAMPLES_GYRO; i++) {
+        Wire.beginTransmission(MPU6050_ADDR);
+        Wire.write(0x3B); // Registro inicial de Accel X
+        if (Wire.endTransmission(false) != 0) { i--; delay(3); continue; }
+        Wire.requestFrom(MPU6050_ADDR, 14);
+        if (Wire.available() >= 14) {
+            sum_ax += ler16();
+            sum_ay += ler16();
+            sum_az += ler16();
+            ler16(); // temp descartado
+            sum_gx += ler16();
+            sum_gy += ler16();
+            sum_gz += ler16();
+        }
+        if (i % 25 == 0) {
+            calib_led = !calib_led;
+            digitalWrite(LED_PIN, calib_led ? HIGH : LOW);
+        }
+        delay(3);
+    }
+    digitalWrite(LED_PIN, LOW);
+
+    gyro_offset_x = (sum_gx / (float)SAMPLES_GYRO) / 131.0f;
+    gyro_offset_y = (sum_gy / (float)SAMPLES_GYRO) / 131.0f;
+    gyro_offset_z = (sum_gz / (float)SAMPLES_GYRO) / 131.0f;
+
+    // Registra o vetor gravimetrico de repouso no prumo
+    float ax_zero = (sum_ax / (float)SAMPLES_GYRO);
+    float ay_zero = (sum_ay / (float)SAMPLES_GYRO);
+    float az_zero = (sum_az / (float)SAMPLES_GYRO);
+
+    // Ajusta o zero mecanico de repouso
+    theta_offset_x = atan2f(-ax_zero, az_zero);
+    theta_offset_y = atan2f(ay_zero, az_zero);
+
+    sx_est = 0; sy_est = 0; ux_est = 0; uy_est = 0;
+    Serial.println(">> Calibracao Concluida! Zero gravimetrico ajustado.");
+}
+
+// =========================================================================================
+// [NOVO - FUSAO GRAVIMETRICA REAL] ESTIMADOR DE ATITUDE BIDIMENSIONAL COM ATAN2
+// =========================================================================================
+void passo_fusao_atitude(float gx, float gy, float gz, float ax_raw_val, float ay_raw_val, float az_raw_val, float dt_k) {
+    // 1. Inclinacoes gravimetricas absolutas medidas pelo acelerometro via atan2 (em radianos)
+    // Se a esfera inclinar, o vetor de gravidade muda de direcao instantaneamente
+    float th_acc_x = atan2f(-ax_raw_val, az_raw_val) - theta_offset_x;
+    float th_acc_y = atan2f(ay_raw_val, az_raw_val) - theta_offset_y;
+
+    // 2. Taxas angulares instantaneas do giroscopio (em radianos/s)
+    // Rotacao em torno de Y produz inclinacao no eixo X; rotacao em X produz inclinacao em Y
+    float rate_x = (gy - gyro_offset_y) * (PI / 180.0f);
+    float rate_y = (gx - gyro_offset_x) * (PI / 180.0f);
+    float wz     = (gz - gyro_offset_z) * (PI / 180.0f);
+
+    // 3. Fusao Complementar Dinamica com compensacao da rotacao de Yaw nos eixos do corpo
+    // Integracao da taxa + correcao gravimetrica absoluta (elimina deriva e pega toda a amplitude real)
+    sx_est = ALPHA_FUSAO * (sx_est + (rate_x + wz * sy_est) * dt_k) + (1.0f - ALPHA_FUSAO) * th_acc_x;
+    sy_est = ALPHA_FUSAO * (sy_est + (rate_y - wz * sx_est) * dt_k) + (1.0f - ALPHA_FUSAO) * th_acc_y;
+
+    // Velocidades angulares limpas usadas pelo ganho amortecedor KD
+    ux_est = rate_x;
+    uy_est = rate_y;
+
+    // Angulo total escalar resultante de balanco [graus]
+    theta_total_deg = sqrtf(sx_est * sx_est + sy_est * sy_est) * (180.0f / PI);
+}
+
+// =========================================================================================
+// [120 GRAUS] ALOCACAO DE FORCAS NOS 3 PROPULSORES (MATRIZ INVERSA B^-1)
+// =========================================================================================
+void calcular_pulsos_120(float Fx, float Fy, float u_yaw_cmd, int &pwm_bf, int &pwm_as, int &pwm_tr) {
+    float p_sw_bf = 0.0f;
+    float p_sw_as = 0.0f;
+    float p_sw_tr = 0.0f;
+
+    if (anti_balanco_ativo) {
+        float norm_F = sqrtf(Fx * Fx + Fy * Fy);
+        float limiar = sw_hysteresis_on ? F_MIN_TOTAL : (2.0f * F_MIN_TOTAL);
+        sw_hysteresis_on = (norm_F > limiar);
+
+        if (sw_hysteresis_on) {
+            // [CORRECAO FISICA BANCADA MPU6050]:
+            // +X aponta para BF (Cima), +Y aponta para a Direita.
+            // Vetores de empuxo unitarios para pulso positivo (+120 us):
+            //   BF (PA0):  [0, +1]
+            //   AS (PA15): [+sqrt(3)/2, -1/2]
+            //   TR (PA1):  [+sqrt(3)/2, +1/2]
+            // Matriz inversa desacoplada (tau_yaw = 0):
+            //   f_bf = (2/3) * Fy
+            //   f_as = +(1/sqrt(3)) * Fx - (1/3) * Fy
+            //   f_tr = +(1/sqrt(3)) * Fx + (1/3) * Fy
+            float f_des_bf = (2.0f / 3.0f) * Fy;
+            float f_des_as = (+0.577350269f) * Fx - (0.333333333f) * Fy;
+            float f_des_tr = (+0.577350269f) * Fx + (0.333333333f) * Fy;
+
+            // Escala proporcional caso exceda a margem SWING_US_MAX
+            float lam = 1.0f;
+            float f_max_permitido = KF_FWD * ((SWING_US_MAX - DB_US) * (SWING_US_MAX - DB_US));
+
+            if (fabsf(f_des_bf) > 1e-6f) lam = fminf(lam, f_max_permitido / fabsf(f_des_bf));
+            if (fabsf(f_des_as) > 1e-6f) lam = fminf(lam, f_max_permitido / fabsf(f_des_as));
+            if (fabsf(f_des_tr) > 1e-6f) lam = fminf(lam, f_max_permitido / fabsf(f_des_tr));
+
+            f_des_bf *= lam;
+            f_des_as *= lam;
+            f_des_tr *= lam;
+
+            // Conversao direta de Forca [N] para pulso de microsegundos [us]
+            auto forca_para_us = [](float f_n) -> float {
+                if (fabsf(f_n) < F_DEADZONE) return 0.0f;
+                float kf = (f_n > 0.0f) ? KF_FWD : KF_REV;
+                return (f_n > 0.0f ? 1.0f : -1.0f) * (DB_US + sqrtf(fabsf(f_n) / kf));
+            };
+
+            p_sw_bf = forca_para_us(f_des_bf);
+            p_sw_as = forca_para_us(f_des_as);
+            p_sw_tr = forca_para_us(f_des_tr);
+        }
+    }
+
+    // Torque de Yaw distribuido igualmente nos 3 propulsores a 120 graus (INTACTO - CONFORME SOLICITADO)
+    float p_yaw = (u_yaw_cmd == 0.0f) ? 0.0f : roundf((2.0f / 3.0f) * u_yaw_cmd);
+
+    // Mistura final: Mantem a regra consagrada do Yaw e soma o anti-balanco desacoplado
+    int bf_cmd = ESC_NEUTRAL + (int)roundf(p_sw_bf) - (int)roundf(p_yaw * DIR_BF);
+    int as_cmd = ESC_NEUTRAL + (int)roundf(p_sw_as) - (int)roundf(p_yaw * DIR_AS);
+    int tr_cmd = ESC_NEUTRAL + (int)roundf(p_sw_tr) - (int)roundf(p_yaw * DIR_TR);
+
+    pwm_bf = constrain(bf_cmd, LIMIT_PWM_MIN, LIMIT_PWM_MAX);
+    pwm_as = constrain(as_cmd, LIMIT_PWM_MIN, LIMIT_PWM_MAX);
+    pwm_tr = constrain(tr_cmd, LIMIT_PWM_MIN, LIMIT_PWM_MAX);
+}
+
+// =========================================================================================
+// [MANTIDO] FUNCAO DE TESTE E IDENTIFICACAO SEQUENCIAL DOS 3 MOTORES
+// =========================================================================================
+void testarIdentificacaoMotores() {
+    Serial.println("\n==========================================================");
+    Serial.println("  INICIANDO TESTE E IDENTIFICACAO DOS MOTORES             ");
+    Serial.println("  Observe qual helice gira e qual o sentido do fluxo!     ");
+    Serial.println("==========================================================");
+    Serial2.println("\n[TESTE_MOTORES]: Iniciando sequencia de identificacao...");
+
+    esc_bf.writeMicroseconds(ESC_NEUTRAL);
+    esc_as.writeMicroseconds(ESC_NEUTRAL);
+    esc_tr.writeMicroseconds(ESC_NEUTRAL);
+    delay(1000);
+
+    struct MotorTeste {
+        const char* nome;
+        const char* pino;
+        Servo* esc;
+    };
+
+    MotorTeste listaMotores[3] = {
+        {"MOTOR 1 (BF)", "PA0",  &esc_bf},
+        {"MOTOR 2 (AS)", "PA15", &esc_as},
+        {"MOTOR 3 (TR)", "PA1",  &esc_tr}
+    };
+
+    for (int i = 0; i < 3; i++) {
+        Serial.println("----------------------------------------------------------");
+        Serial.print(">>> TESTANDO ");
+        Serial.print(listaMotores[i].nome);
+        Serial.print(" no pino ");
+        Serial.println(listaMotores[i].pino);
+
+        Serial2.print("[TESTE]: ");
+        Serial2.print(listaMotores[i].nome);
+        Serial2.print(" pino ");
+        Serial2.println(listaMotores[i].pino);
+
+        // 1. Sentido Horário (+120 us -> 1620 us) por 2 segundos
+        Serial.println("  [1/2] Girando SENTIDO HORARIO (+120 us -> 1620 us) por 2 segundos...");
+        digitalWrite(LED_PIN, LOW);
+        listaMotores[i].esc->writeMicroseconds(ESC_NEUTRAL + PWM_TEST_DELTA);
+        delay(2000);
+
+        // Pausa de 1s
+        listaMotores[i].esc->writeMicroseconds(ESC_NEUTRAL);
+        digitalWrite(LED_PIN, HIGH);
+        Serial.println("  [-] Neutro / Parado por 1 segundo...");
+        delay(1000);
+
+        // 2. Sentido Anti-Horário (-120 us -> 1380 us) por 2 segundos
+        Serial.println("  [2/2] Girando SENTIDO ANTI-HORARIO (-120 us -> 1380 us) por 2 segundos...");
+        digitalWrite(LED_PIN, LOW);
+        listaMotores[i].esc->writeMicroseconds(ESC_NEUTRAL - PWM_TEST_DELTA);
+        delay(2000);
+
+        // Pausa de 1s
+        listaMotores[i].esc->writeMicroseconds(ESC_NEUTRAL);
+        digitalWrite(LED_PIN, HIGH);
+        Serial.println("  [-] Neutro / Parado por 1 segundo...");
+        delay(1000);
+    }
+
+    Serial.println("==========================================================");
+    Serial.println("  TESTE DE IDENTIFICACAO CONCLUIDO!                       ");
+    Serial.println("==========================================================\n");
+    Serial2.println("[TESTE_MOTORES]: Concluido!");
+}
+
+// =========================================================================================
+// [MANTIDO] PROCESSAMENTO DE COMANDOS SERIAL (USB E SERIAL2)
+// =========================================================================================
+String bufUSB = "";
+String bufSerial2 = "";
+
+void executarComandoCaractere(char cmd) {
+    bateuCima  = (digitalRead(FIM_CURSO_CIMA) == HIGH);
+    bateuBaixo = (digitalRead(FIM_CURSO_BAIXO) == HIGH);
+
+    if (cmd == 'w' || cmd == 'W') {
+        if (!bateuCima) moverSubir();
+        else { pararMotor(); Serial.println("[BLOQUEADO] Topo atingido!"); }
+    }
+    else if (cmd == 's' || cmd == 'S') {
+        if (!bateuBaixo) moverDescer();
+        else { pararMotor(); Serial.println("[BLOQUEADO] Base atingida!"); }
+    }
+    else if (cmd == ' ' || cmd == 'x' || cmd == 'X') {
+        pararMotor();
+    }
+    else if (cmd == 'a' || cmd == 'A') {
+        girarSentidoA();
+    }
+    else if (cmd == 'd' || cmd == 'D') {
+        girarSentidoD();
+    }
+    else if (cmd == 'c' || cmd == 'C') {
+        pararBTS();
+    }
+    else if (cmd == 'e' || cmd == 'E') {
+        lerEncoderAS5600();
+    }
+    else if (cmd == 'm' || cmd == 'M') {
+        testarIdentificacaoMotores();
+    }
+    else if (cmd == 'y' || cmd == 'Y') {
+        yaw_ativo = !yaw_ativo;
+        if (yaw_ativo) {
+            Serial.println(">> [YAW]: CONTROLE DE YAW ATIVADO ('y')!");
+            Serial2.println(">> [YAW]: CONTROLE DE YAW ATIVADO ('y')!");
+        } else {
+            Serial.println(">> [YAW]: CONTROLE DE YAW DESATIVADO ('y').");
+            Serial2.println(">> [YAW]: CONTROLE DE YAW DESATIVADO ('y').");
+            integral_error_yaw = 0;
+            yaw_output = 0;
+        }
+    }
+    else if (cmd == 'b' || cmd == 'B' || cmd == 'p' || cmd == 'P') {
+        anti_balanco_ativo = !anti_balanco_ativo;
+        if (anti_balanco_ativo) {
+            Serial.println(">> [PENDULO]: CONTROLE ANTI-BALANCO ATIVADO!");
+            Serial2.println(">> [PENDULO]: CONTROLE ANTI-BALANCO ATIVADO!");
+        } else {
+            Serial.println(">> [PENDULO]: CONTROLE ANTI-BALANCO DESATIVADO.");
+            Serial2.println(">> [PENDULO]: CONTROLE ANTI-BALANCO DESATIVADO.");
+            F_cmd_x = 0; F_cmd_y = 0;
+        }
+    }
+    else if (cmd == 'k' || cmd == 'K') {
+        pararBTS();
+        pararMotor();
+        Serial.println(">> [STM]: PARADA GERAL EXECUTADA ('k')");
+        Serial2.println(">> [STM]: PARADA GERAL EXECUTADA ('k')");
+    }
+    else if (cmd == 'z' || cmd == 'Z') {
+        calibrate_gyro();
+        Serial.println(">> [PENDULO]: Zero gravimetrico recalibrado (esfera em repouso no prumo).");
+    }
+    else if (cmd == 't' || cmd == 'T') {
+        if (periodo_medido > 1.0f) {
+            float L_calc = G_ACC * (periodo_medido / (2.0f * PI)) * (periodo_medido / (2.0f * PI));
+            L_M = constrain(L_calc, L_MIN, L_MAX);
+            Serial.print(">> [PENDULO]: L calibrado pelo periodo medido = ");
+            Serial.print(L_M, 2); Serial.println(" m");
+        } else {
+            Serial.println(">> [PENDULO]: Balance a esfera livre para medir o periodo natural.");
+        }
+    }
+    else if (cmd == '0') {
+        desired_yaw = 0.0f;
+        integral_error_yaw = 0.0f;
+        Serial.println(">> [YAW]: desired_yaw zerado (0.0)");
+        Serial2.println(">> [YAW]: desired_yaw zerado (0.0)");
+    }
+}
+
+void processarStringComando(String cmdStr) {
+    cmdStr.trim();
+    if (cmdStr.length() == 0) return;
+
+    if (cmdStr.length() == 1 && !isDigit(cmdStr.charAt(0)) && cmdStr.charAt(0) != '-') {
+        executarComandoCaractere(cmdStr.charAt(0));
+    }
+    else if ((cmdStr.charAt(0) == 'L' || cmdStr.charAt(0) == 'l') && cmdStr.length() > 1) {
+        float novo_L = cmdStr.substring(1).toFloat();
+        if (novo_L >= L_MIN && novo_L <= L_MAX) {
+            L_M = novo_L;
+            Serial.print(">> [PENDULO]: Novo comprimento do cabo L = ");
+            Serial.print(L_M, 2); Serial.println(" m");
+        } else {
+            Serial.println(">> [ERRO]: L fora da faixa permitida (0.5 a 6.0 m).");
+        }
+    }
+    else if (isDigit(cmdStr.charAt(0)) || cmdStr.charAt(0) == '-' || cmdStr.charAt(0) == '+') {
+        float camera_angle = cmdStr.toFloat();
+        yaw_gyro = 0;
+        desired_yaw = camera_angle;
+
+        String confirmacao = ">> NOVO ANGULO APLICADO: " + String(desired_yaw, 2);
+        Serial.println(confirmacao);
+        Serial2.println(confirmacao);
+    }
+}
+
+void checar_serial_nao_bloqueante() {
+    while (Serial.available() > 0) {
+        char c = Serial.read();
+        if (c == '\n' || c == '\r') {
+            if (bufUSB.length() > 0) {
+                processarStringComando(bufUSB);
+                bufUSB = "";
+            }
+        } else {
+            if (bufUSB.length() == 0 && (c == 'w' || c == 'W' || c == 's' || c == 'S' ||
+                                         c == 'a' || c == 'A' || c == 'd' || c == 'D' ||
+                                         c == 'c' || c == 'C' || c == ' ' || c == 'x' || c == 'X' ||
+                                         c == 'e' || c == 'E' || c == 'm' || c == 'M' ||
+                                         c == 'y' || c == 'Y' || c == 'b' || c == 'B' ||
+                                         c == 'p' || c == 'P' || c == 'z' || c == 'Z' ||
+                                         c == 't' || c == 'T' || c == 'k' || c == 'K' || c == '0')) {
+                executarComandoCaractere(c);
+            } else {
+                bufUSB += c;
+                if (bufUSB.length() > 30) bufUSB = "";
+            }
+        }
+    }
+
+    while (Serial2.available() > 0) {
+        char c = Serial2.read();
+        if (c == '\n' || c == '\r') {
+            if (bufSerial2.length() > 0) {
+                processarStringComando(bufSerial2);
+                bufSerial2 = "";
+            }
+        } else {
+            if (bufSerial2.length() == 0 && (c == 'w' || c == 'W' || c == 's' || c == 'S' ||
+                                             c == 'a' || c == 'A' || c == 'd' || c == 'D' ||
+                                             c == 'c' || c == 'C' || c == ' ' || c == 'x' || c == 'X' ||
+                                             c == 'e' || c == 'E' || c == 'm' || c == 'M' ||
+                                             c == 'y' || c == 'Y' || c == 'b' || c == 'B' ||
+                                             c == 'p' || c == 'P' || c == 'z' || c == 'Z' ||
+                                             c == 't' || c == 'T' || c == 'k' || c == 'K' || c == '0')) {
+                executarComandoCaractere(c);
+            } else {
+                bufSerial2 += c;
+                if (bufSerial2.length() > 30) bufSerial2 = "";
+            }
+        }
+    }
+}
+void init_Pinca() {
+    pinMode(PINCA_EN_R_PIN, OUTPUT);
+    pinMode(PINCA_EN_L_PIN, OUTPUT);
+    pinMode(PINCA_RPWM_PIN, OUTPUT);
+    pinMode(PINCA_LPWM_PIN, OUTPUT);
+    pararMotor();
+
+    pinMode(POLIA_EN_R_PIN, OUTPUT);
+    pinMode(POLIA_EN_L_PIN, OUTPUT);
+    pinMode(POLIA_RPWM_PIN, OUTPUT);
+    pinMode(POLIA_LPWM_PIN, OUTPUT);
+    ativarDriver();
+    pararBTS();
+
+    pinMode(FIM_CURSO_CIMA, INPUT_PULLDOWN);
+    pinMode(FIM_CURSO_BAIXO, INPUT_PULLDOWN);
+
+    pinMode(SENSOR_OLHAL_D0, INPUT);
+    pinMode(SENSOR_OLHAL_A0, INPUT);
+
+    Wire.setSDA(AS5600_SDA);
+    Wire.setSCL(AS5600_SCL);
+    Wire.begin();
+    encoder.begin();
+
+    Serial.println("==========================================================");
+    Serial.println(" SISTEMA COMPLETO: BTS7960 + AS5600 + YAW + 3 MOTORES 120 ");
+    Serial.println("  PINCA:   'w'=Subir | 's'=Descer | 'x'=Parar             ");
+    Serial.println("  POLIA:   'a'=Giro A| 'd'=Giro D | 'c'=Parar             ");
+    Serial.println("  AS5600:  'e'=Ler Angulo Atual Mecanismo                 ");
+    Serial.println("  PENDULO: 'p'=Liga/Desliga Anti-Balanco | 'z'=Zerar MPU  ");
+    Serial.println("           'm'=Testar Motores | 'L1.5'=Define L [m]       ");
+    Serial.println("==========================================================");
+}
+
+// =========================================================================================
+// SETUP PRINCIPAL
+// =========================================================================================
+void setup() {
+    pinMode(LED_PIN, OUTPUT);
+    digitalWrite(LED_PIN, HIGH);
+
+    esc_bf.attach(BF_PIN);
+    esc_as.attach(AS_PIN);
+    esc_tr.attach(TR_PIN);
+    esc_bf.writeMicroseconds(ESC_NEUTRAL);
+    esc_as.writeMicroseconds(ESC_NEUTRAL);
+    esc_tr.writeMicroseconds(ESC_NEUTRAL);
+
+    Serial.begin(115200);
+    Serial2.setRx(PA3);
+    Serial2.setTx(PA2);
+    Serial2.begin(115200);
+
+    destravar_barramento_I2C();
+    Wire.setSCL(AS5600_SCL);
+    Wire.setSDA(AS5600_SDA);
+    Wire.begin();
+    Wire.setTimeout(3);
+    delay(100);
+
+    init_mpu();
+    calibrate_gyro();
+
+    yaw_gyro = 0;
+    last_time = micros();
+    last_swing_micros = micros();
+    last_telemetry_time = millis();
+
+    init_Pinca();
+    delay(500);
+}
+
+// =========================================================================================
+// LOOP PRINCIPAL
+// =========================================================================================
+void loop() {
+    unsigned long now = micros();
+    float dt = (now - last_time) / 1000000.0f;
+    last_time = now;
+
+    if (dt <= 0.000001f) dt = 0.005f;
+    if (dt > 0.5f) dt = 0.01f;
+
+    bateuCima  = (digitalRead(FIM_CURSO_CIMA) == HIGH);
+    bateuBaixo = (digitalRead(FIM_CURSO_BAIXO) == HIGH);
+
+    checar_serial_nao_bloqueante();
+    intensidade_mult = 1.0f;
+
+    // Leitura dos registradores da MPU6050 (14 bytes contiguos)
+    float gx_dps = 0, gy_dps = 0, gz_dps = 0;
+    float ax_raw_f = 0, ay_raw_f = 0, az_raw_f = 0;
+
+    Wire.beginTransmission(MPU6050_ADDR);
+    Wire.write(0x3B);
+    if (Wire.endTransmission(false) == 0) {
+        Wire.requestFrom(MPU6050_ADDR, 14);
+        if (Wire.available() >= 14) {
+            int16_t ax_raw = ler16();
+            int16_t ay_raw = ler16();
+            int16_t az_raw = ler16();
+            ler16(); // temp
+            int16_t gx_raw = ler16();
+            int16_t gy_raw = ler16();
+            gyro_z_raw     = ler16();
+
+            gx_dps = (gx_raw / 131.0f);
+            gy_dps = (gy_raw / 131.0f);
+            gz_dps = (gyro_z_raw / 131.0f);
+
+            ax_raw_f = (float)ax_raw;
+            ay_raw_f = (float)ay_raw;
+            az_raw_f = (float)az_raw;
+
+            // Integracao do Yaw
+            float raw_yaw_rate = gz_dps - gyro_offset_z;
+            filtered_gyro_rate = (alpha * raw_yaw_rate) + ((1.0f - alpha) * filtered_gyro_rate);
+            if (fabsf(filtered_gyro_rate) < 0.5f) {
+                filtered_gyro_rate = 0.0f;
+            }
+            yaw_gyro += filtered_gyro_rate * dt;
+            if (yaw_gyro >= 360.0f) yaw_gyro -= 360.0f;
+            if (yaw_gyro < 0.0f)   yaw_gyro += 360.0f;
+        }
+    }
+
+    // =====================================================================================
+    // [NOVO - FUSAO GRAVIMETRICA REAL] MALHA DE CONTROLE DO PENDULO A 200 HZ
+    // =====================================================================================
+    if (now - last_swing_micros >= SWING_INTERVAL_US) {
+        float dt_swing = (now - last_swing_micros) * 1e-6f;
+        last_swing_micros = now;
+
+        // Atualiza a inclinacao com fusao gravimetrica direta (atan2 + gyro + compensacao Yaw)
+        passo_fusao_atitude(gx_dps, gy_dps, gz_dps, ax_raw_f, ay_raw_f, az_raw_f, dt_swing);
+
+        // Forca de controle de anti-balanco sintonizada para 12 kg:
+        // [ANTECIPACAO DE FASE] Lead Predictor de 120 ms para cancelar atraso do motor/helice
+        float sx_pred = sx_est + 0.12f * ux_est;
+        float sy_pred = sy_est + 0.12f * uy_est;
+
+        // Forca de controle antecipativa para 12 kg (freia no momento exato de velocidade maxima):
+        F_cmd_x = -(KP_SWING * sx_pred + KD_SWING * ux_est);
+        F_cmd_y = -(KP_SWING * sy_pred + KD_SWING * uy_est);
+
+        // Medicao de periodo em oscilacao livre (quando anti-balanco desligado)
+        if (!anti_balanco_ativo) {
+            float vel_ang = sqrtf(ux_est * ux_est + uy_est * uy_est);
+            if (vel_ang > (2.0f * PI / 180.0f)) cruzamento_armado = true;
+            if (cruzamento_armado && vel_ang < (0.5f * PI / 180.0f)) {
+                cruzamento_armado = false;
+                unsigned long t_cruz = micros();
+                float T_amostra = (t_cruz - ultimo_cruzamento_us) * 2e-6f;
+                ultimo_cruzamento_us = t_cruz;
+                if (T_amostra > 1.2f && T_amostra < 6.0f) {
+                    periodo_medido = (periodo_medido == 0) ? T_amostra : 0.7f * periodo_medido + 0.3f * T_amostra;
+                }
+            }
+        }
+    }
+
+    // =====================================================================================
+    // [MANTIDO] CONTROLE PID DO YAW
+    // =====================================================================================
+    if (yaw_ativo) {
+
+    float Kp = 5.0f;  
+    float Ki = 1.0f;  
+    float Kd = 10.0f;
+    float P = pos_error * Kp;
+
+    integral_error_yaw += pos_error * dt;
+    if ((pos_error > 0 && last_error_yaw < 0) || (pos_error < 0 && last_error_yaw > 0)) {
+        integral_error_yaw = 0;
+    }
+    integral_error_yaw = constrain(integral_error_yaw, -400.0f, 400.0f);
+
+    float I = integral_error_yaw * Ki;
+    float derivative_error = (pos_error - last_error_yaw) / dt;
+    float D = derivative_error * Kd;
+    last_error_yaw = pos_error;
+
+    yaw_output = (P + I + D) * intensidade_mult;
+
+    if (fabsf(pos_error) <= DEADZONE) {
+        yaw_output = 0;
+        integral_error_yaw = 0;
+        digitalWrite(LED_PIN, HIGH);
+    } else {
+        digitalWrite(LED_PIN, LOW);
+    }
+
+    if (yaw_output > 0 && yaw_output < ESC_MIN_POWER)   yaw_output = ESC_MIN_POWER;  
+    if (yaw_output < 0 && yaw_output > -ESC_MIN_POWER)  yaw_output = -ESC_MIN_POWER;
+    } else {
+        yaw_output = 0.0f;
+        integral_error_yaw = 0.0f;
+        digitalWrite(LED_PIN, HIGH);
+    }
+
+    // =====================================================================================
+    // [120 GRAUS] ALOCACAO NOS 3 MOTORES
+    // =====================================================================================
+    int bf_pwm = ESC_NEUTRAL;
+    int as_pwm = ESC_NEUTRAL;
+    int tr_pwm = ESC_NEUTRAL;
+
+    calcular_pulsos_120(F_cmd_x, F_cmd_y, yaw_output, bf_pwm, as_pwm, tr_pwm);
+
+    esc_bf.writeMicroseconds(bf_pwm);
+    esc_as.writeMicroseconds(as_pwm);
+    esc_tr.writeMicroseconds(tr_pwm);
+
+    // =====================================================================================
+    // [TELEMETRIA 10 HZ]
+    // =====================================================================================
+    if (millis() - last_telemetry_time >= TELEMETRY_INTERVAL) {
+        last_telemetry_time = millis();
+
+        String string_telemetria = "YAW_GYRO: " + String(yaw_gyro, 2) + "," +
+                                   String(filtered_gyro_rate, 2) + "," +
+                                   String(bf_pwm) + "," +
+                                   String(as_pwm) + "," +
+                                   String(tr_pwm) + ", POS_ERROR: " +
+                                   String(pos_error, 2) + "," +
+                                   String(yaw_output, 2) + "," +
+                                   String(bateuCima ? "1" : "0") + "," + 
+                                   String(bateuBaixo ? "1" : "0") + "," +
+                                   String(theta_total_deg, 2) + "," +
+                                   String(anti_balanco_ativo ? "1" : "0");
+
+        Serial.println(string_telemetria);  
+        Serial2.println(string_telemetria);  
+    }
+
+    // [MANTIDO] Debounce do Sensor Optico
+    int leituraCruaOlhal = digitalRead(SENSOR_OLHAL_D0);
+    if (leituraCruaOlhal != ultimoEstadoFisicoOlhal) {
+        ultimoTempoFiltro = millis();
+    }
+    if ((millis() - ultimoTempoFiltro) > tempoFiltro) {
+        if (leituraCruaOlhal != estadoEstavelOlhal) {
+            estadoEstavelOlhal = leituraCruaOlhal;
+            if (estadoEstavelOlhal == LOW) {
+                Serial.println("olhal chegou ao mecanismo (Luz detectada)");
+            } else {
+                Serial.println("olhal removido do mecanismo (Feixe bloqueado)");
+            }
+        }
+    }
+    ultimoEstadoFisicoOlhal = leituraCruaOlhal;
+
+    // [MANTIDO] Seguranca Fins de Curso da Pinca
+    if (bateuCima && estadoMotor == 1) {
+        pararMotor();
+        Serial.println("[PARADA] Atingiu o topo! So pode descer ('s').");
+    }
+    if (bateuBaixo && estadoMotor == -1) {
+        pararMotor();
+        Serial.println("[PARADA] Atingiu a base! So pode subir ('w').");
+    }
+}
+

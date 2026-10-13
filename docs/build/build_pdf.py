@@ -305,7 +305,7 @@ story.append(PageBreak())
 
 # ══════════════════════════════════ CAP 1 ══════════════════════════════════
 H("1. Números-chave", 0)
-P("Valores vigentes no repositório (commit <b>d1438bf</b>). Parâmetros marcados como "
+P("Valores vigentes no repositório (commit <b>d0593cb</b>). Parâmetros marcados como "
   "provisórios são substituídos pela calibração do wizard.")
 add_table(
     ["Parâmetro", "Valor", "Origem/estado"],
@@ -319,6 +319,8 @@ add_table(
         ["Força por hélice @ ±500 µs", "18 N (curva quadrática)", "provisório — wizard calibra"],
         ["Eficiência de ré / zona morta", "60% / 30 µs", "provisórios — wizard calibra"],
         ["Faixa de PWM", "1500 ± 500 µs (1000–2000)", "faixa completa do ESC"],
+        ["Travamento direcional do ESC (latch)", "~±60 µs (PWM ~1440–1560)",
+         "provisório — wizard medirá por ESC"],
         ["Reservas de µs (balanço / yaw)", "490 / 300", "orçamento por motor"],
         ["Envelope de força líquida", "≈ 15,5 N (13% do peso)", "derivado da curva"],
         ["Ganhos XY (kp / ki)", "45 N·s/m / 2,2 N·s/m", "sintonizados no simulador"],
@@ -567,7 +569,7 @@ code([
     "python -m twin  --sim | --serial COM7 | --tcp 192.168.0.50[:9999]  [--scenario ...]",
     "python wizard.py --sim | --serial COM7 | --tcp HOST [--out calib.json] [--push]",
     "python rasp/agent.py --port /dev/serial0 --tcp 9999        # na Raspberry Pi",
-    "python -m pytest tests/ -q                                 # 38 testes",
+    "python -m pytest tests/ -q                                 # 44 testes",
 ])
 
 # ══════════════════════════════════ CAP 6 ══════════════════════════════════
@@ -681,9 +683,9 @@ add_table(
          "mesmo degrau de pulso no hardware e no simulador, varrer τ do modelo até as "
          "respostas se sobreporem; afeta o wizard (~20% no kf) e a margem de estabilidade "
          "dos ganhos altos"],
-        ["Faixa de travamento do ESC", "não modelada",
-         "varredura cuidadosa de µs em cada ESC mapeando onde o motor trava (relato "
-         "histórico: ~±60 µs); vira propriedade por motor"],
+        ["Faixa de travamento do ESC", "~±60 µs (provisório)",
+         "modelada e mitigada no caminho de controle (Cap. 10.5); medir por ESC na "
+         "bancada e refinar o default (rotina do wizard planejada)"],
         ["Banda de não-atuação", "não implementada",
          "decidir a tolerância em graus/fora-de-band; alimenta a política proposta no Cap. 10"],
     ],
@@ -819,6 +821,9 @@ add_table(
          "do heading; a soma nunca deve passar da faixa"],
         ["F_MAX_500 / REV_RATIO / DB_US", "18 N / 0,60 / 30 µs", "curva provisória — o wizard "
          "substitui por motor (comando M)"],
+        ["ESC_LATCH_US / LATCH_MARGIN_US", "60 / 15 µs", "faixa de travamento direcional do "
+         "ESC + margem: no caminho de controle, o menor µs não-nulo nasce fora da faixa e "
+         "comando sub-piso vira neutro (mitigação ativa; o caminho W do wizard não quantiza)"],
         ["COMP_YAW_SIGN", "+1", "sinal da compensação de yaw na fusão; inverter se o teste do "
          "Cap. 6 (etapa 3) falhar"],
         ["ALPHA_FUSAO", "0,88", "peso do giroscópio na fusão (dt = 5 ms); aumentar = mais "
@@ -852,15 +857,18 @@ bullets([
 H("10.5 PROPOSTA (não implementado): política de perto-do-neutro", 1)
 callout("Problema conhecido em bancada: PWMs pequenos (relato: ~±60 µs) podem travar o motor "
         "naquele sentido até uma reversão; e em regime permanente os motores ficam alternando "
-        "de lado. Proposta desenhada, ainda NÃO implementada: (1) caracterizar a faixa de "
-        "travamento por ESC na bancada; (2) gerenciador de perto-do-neutro na camada de "
-        "atuador — banda morta com histerese de Schmitt na norma da força (ativa > ~0,5 N, "
-        "inativa < ~0,25 N), snap-to-neutral de saídas dentro da faixa de risco, integração "
+        "de lado. Mitigação mínima JÁ ATIVA (paridade Python/firmware): o menor µs não-nulo "
+        "comandado nasce FORA da faixa de travamento (latch + 15 µs de margem) — comandos "
+        "sub-piso viram neutro, tanto no caminho de força (gate por motor) quanto no µs final "
+        "(quantização anti-banda de swing+yaw); o caminho do wizard não quantiza de propósito, "
+        "para manter o modelo do ESC exposto e medível. Ainda PROPOSTO (não implementado — "
+        "decidir com os números medidos): (1) caracterizar a faixa de travamento por ESC na "
+        "bancada; (2) gerenciador de perto-do-neutro na camada de atuador — banda morta com "
+        "histerese de Schmitt na norma da força (ativa > ~0,5 N, inativa < ~0,25 N), integração "
         "condicional e permanência mínima de sentido (~200 ms); (3) chute de partida curto "
         "fora da faixa antes de assumir um sentido a partir do neutro. Custo: droop residual "
-        "de ~0,25–0,5° dentro da banda (absorvido pelo loop de visão). Decidir e implementar "
-        "com os números medidos, não antes.",
-        color=SEM_WARNING, title="Proposta de projeto — aguardando caracterização em bancada",
+        "de ~0,25–0,5° dentro da banda (absorvido pelo loop de visão).",
+        color=SEM_WARNING, title="Mitigação ativa + proposta de gerenciador — aguardando caracterização em bancada",
         bg=colors.HexColor('#f4efe4'))
 
 # ══════════════════════════════════ CAP 11 ══════════════════════════════════
@@ -869,9 +877,10 @@ add_table(
     ["Sintoma", "Causa provável", "Ação"],
     [
         ["Motor travou após PWM pequeno e só volta ao inverter o sentido",
-         "travamento do ESC na zona morta (~±60 µs) — problema conhecido, ainda não tratado",
-         "reverter o sentido brevemente com µs fora da zona morta; médio prazo: política do "
-         "Cap. 10.5 + caracterização da faixa"],
+         "travamento direcional do ESC (~±60 µs) — mitigado no caminho de controle (gate + "
+         "quantização anti-banda, Cap. 10.5); comandos brutos (wizard) ainda exercem a faixa",
+         "reverter o sentido brevemente com µs fora da zona morta; médio prazo: "
+         "caracterização por ESC + gerenciador completo do Cap. 10.5"],
         ["Heading deriva com o tempo", "deriva do giroscópio (sem referência absoluta)",
          "'z' com a esfera parada; em operação longa usar a visão (V) como referência"],
         ["Esfera amortece na direção errada quando gira", "COMP_YAW_SIGN invertido ou eixos "
@@ -982,7 +991,7 @@ content = {
     "summary": ("Manual completo do pêndulo esférico controlado: hardware e conexões, "
                 "firmware do STM32, referência de comandos, calibrações (wizard por motor), "
                 "procedimentos de bancada e o digital twin em tempo real."),
-    "meta": "Equipe Esfera · firmware v2 · repositório: commit d1438bf",
+    "meta": "Equipe Esfera · firmware v2 · repositório: commit d0593cb",
     "footer": "ESFERA · GUIA-01",
     "year": "2026",
     "word": "GUIA",
