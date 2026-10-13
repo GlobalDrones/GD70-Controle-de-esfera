@@ -66,8 +66,8 @@ animation.py      animação 3D + painel de séries temporais (batch)
 firmware/main.cpp firmware STM32 v2 (controle em paridade com o twin)
 twin/             digital twin: protocolo, transportes, STM simulado, janela
 wizard.py         identificação por motor (pulsos → modelo calibrado)
-rasp/agent.py     agente da Rasp: Serial2 do STM ↔ TCP
-tests/            38 testes (física, atuadores, malha fechada, twin, wizard)
+Raspberry/        app da Rasp: visão estéreo + linha + link STM + ponte TCP
+tests/            48 testes (física, atuadores, malha fechada, twin, wizard, Rasp)
 ```
 
 ## Simulador e modo interativo
@@ -91,7 +91,7 @@ R/P/Esc = reset/pausa/sair.
 ```bash
 python -m twin --sim                # contra o STM SIMULADO (testar sem hardware)
 python -m twin --serial COM7        # STM plugado no USB do PC
-python -m twin --tcp 192.168.0.50   # via agente na Rasp (porta 9999)
+python -m twin --tcp 192.168.0.50   # via ponte TCP embutida no app da Rasp
 ```
 
 A janela do twin adiciona à simulação: **esfera fantasma** (estado real:
@@ -105,28 +105,41 @@ Z/X (heading), K (parada geral) e +/− (ganhos, com push ao STM via G).
 
 ```
 STM32 (firmware/main.cpp)
-  ├── USB ──────────────── PC (twin --serial)
-  └── Serial2 → Rasp (rasp/agent.py) → TCP 9999 → PC (twin --tcp)
-                                              ↘ wizard --tcp
+  ├── USB do PC ───────────────────── PC (twin --serial / wizard --serial)
+  └── USB da Rasp → app de visão (Raspberry/main.py) ── dono da serial
+                       ├── visão estéreo + detecção da linha + HUD local
+                       │   (reset físico GPIO18, rádio RC CH12–15)
+                       └── ponte TCP embutida (Raspberry/bridge.py, 9999)
+                              → PC (twin --tcp / wizard --tcp)
 ```
 
-Sem decidir ainda a rede? O transporte é plugável: `--serial` funciona em
-bancada sem rede nenhuma; `--tcp` quando o PC alcança a Rasp por IP (ou via
-túnel `ssh -L 9999:localhost:9999 pi@<rasp>`).
+Um processo na Rasp é o único dono da serial do STM; twin e wizard
+conectam pela ponte TCP (IP direto ou túnel `ssh -L 9999:localhost:9999`).
 
-### Agente na Rasp (deploy)
+### Deploy na Rasp
 
 ```bash
-scp -r rasp/ pi@<rasp>:esfera/
-ssh pi@<rasp> 'sudo cp esfera/esfera-agent.service /etc/systemd/system/ &&
-              sudo systemctl enable --now esfera-agent'
+git clone https://github.com/iNeewbie/esfera.git && cd esfera
+pip3 install -r Raspberry/requirements.txt   # opencv-CONTRIB (WLS), pyserial, gpiozero…
+python3 Raspberry/main.py                    # a partir da raiz do repo
 ```
 
-(requer `pip3 install pyserial` na Rasp; ver cabeçalho de `rasp/agent.py`)
+### Checklist de validação na Rasp (após o flash do firmware v2)
 
-### Contrato da visão (quando as câmeras existirem)
+1. Sem STM: visão e HUD como antes (mono/estéreo, teclas de escala/SGBM).
+2. Com STM v2: HUD alimentado por `TEL`; twin no PC (`--tcp <ip>`) vê o
+   fantasma e a linha a distância D.
+3. Tecla `v`: envio de V ativo → inclinar o alvo e conferir o SENTIDO do
+   bearing (se a esfera girar ao contrário, inverter o sinal no envio —
+   a cadeia visão→yaw nunca fechou no firmware antigo, sinal é validação
+   de bancada).
+4. D vs fita métrica; rádio RC ainda comanda pinça/polia; tecla `p` =
+   parada geral de verdade (agora envia `k`).
 
-A Rasp envia ao STM (e o STM aceita pela Serial2): `V<bearing_graus> <D_m>`
+### Contrato da visão (IMPLEMENTADO em Raspberry/)
+
+A cada frame com linha detectada (tecla `v` liga/desliga o envio), a Rasp
+envia ao STM: `V<bearing_graus> <D_m>`
 — bearing do cabo da linha **no referencial da câmera/corpo** (câmeras fixas
 ao gyro: o bearing É o erro de apontamento, imune à deriva do gyro) e a
 distância estereoscópica ao cabo. O STM usa o bearing como erro direto
@@ -168,7 +181,7 @@ Comandos (USB e Serial2): `w/s/x` pinça · `a/d/c` polia · `e` AS5600 ·
 pelo período · `0` zera yaw desejado · `L<val>` comprimento · `<num>` degrau
 relativo de yaw · `G<idx> <val>` ganho · `R` lê ganhos · `V<b> <D>` visão ·
 `W<m> <us> <ms>` pulso do wizard · `M<m> ...` calibração por motor.
-Telemetria 25 Hz: `TEL,t,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,b,c,L,D,flags`.
+Telemetria 25 Hz: `TEL,t_ms,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,b,c,L,D,flags`.
 
 Loops de controle **desligados no boot** — 'y'/'p' ligam.
 
@@ -190,7 +203,7 @@ Loops de controle **desligados no boot** — 'y'/'p' ligam.
 7. **Anti-balanço ON** com ganhos conservadores (defaults): confirmar a
    DIREÇÃO do amortecimento; subir ganhos ao vivo pelo twin.
 8. **Yaw**: degraus ±15° (referência interna); com a visão, bearing da linha.
-9. **Saturação**: comando grande → PWM nos clamps 1250/1750, sem chatter.
+9. **Saturação**: comando grande → PWM nos clamps 1000/2000, sem chatter.
 
 ## Comportamento esperado (simulador, defaults provisórios, faixa completa do ESC)
 
@@ -199,7 +212,7 @@ Loops de controle **desligados no boot** — 'y'/'p' ligam.
 | Acomodação de velocidade (15° + 0,3 m/s) | ~1,7 s |
 | Perturbação forte (20°/−10° + 0,5/−0,4 m/s) | ~2,7 s |
 | Rajada de 10 N por 2 s | inclina ~5°, recupera em ~17 s |
-| Acomodação de degrau de heading | ~1,8–2,7 s, sobressinal ≤ 1,2° |
+| Acomodação de degrau de heading | ~1,75–2,5 s, sobressinal zero (cenário heading; 1,2° no default) |
 | Desvio de energia em oscilação livre (20°, 20 s) | < 0,5% (sem drift) |
 
 ## Pré-requisitos e instalação

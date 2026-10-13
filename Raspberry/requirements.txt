@@ -1,0 +1,7 @@
+# Rodar a partir da raiz do repo na Rasp (o app importa twin/protocol.py):
+#   cd esfera && python3 Raspberry/main.py
+opencv-contrib-python  # contrib: o WLS (cv2.ximgproc) nao existe no pacote base
+scipy
+pyYAML
+pyserial
+gpiozero
