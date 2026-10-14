@@ -172,16 +172,19 @@ ControllerGains ganhos = {
 
 // Parametros do cabo (L em metros)
 const float L_MIN = 0.5f, L_MAX = 6.0f;
-float L_M = 2.0f; // Comprimento nominal inicial [m] (ajustavel via L<val> ou 't')
+float L_M = 5.0f; // Comprimento nominal ajustado para 5 metros (ajustavel via L<val> ou 't')
 
-// Sinal da compensacao de Yaw na fusao (teorema do transporte)
-const float COMP_YAW_SIGN = 1.0f;
+// Sinal da compensacao de Yaw na fusao (teorema do transporte: w x s)
+const float COMP_YAW_SIGN = -1.0f;
 
 // Constantes da Fusao Complementar e Filtros Passa-Baixas
-const float ALPHA_FUSAO     = 0.88f; // Filtro complementar de inclinacao (200 Hz)
-const float ALPHA_RATE_XY   = 0.22f; // Filtro IIR (~9 Hz) p/ velocidades angulares wx e wy (como no YAWBOM)
-const float ALPHA_RATE_Z    = 0.20f; // Filtro IIR p/ taxa de Yaw (como no YAWBOM)
-const float GYRO_Z_DEADZONE = 0.35f; // Deadzone anti-deriva na integracao do Yaw parado [°/s]
+// Para L = 5.0 m, o periodo do pendulo e ~4.5 s (f ~ 0.22 Hz).
+// ALPHA_FUSAO = 0.9995f define tau ~ 10 s @ 200 Hz: o balanco e 99.7% integrado do gyro
+// sem ruido, eliminando cruzamentos falsos por zero, e o acc ancora o bias lentamente.
+const float ALPHA_FUSAO     = 0.9995f; // Filtro complementar de inclinacao (tau ~ 10 s @ 200 Hz)
+const float ALPHA_RATE_XY   = 0.22f;   // Filtro IIR (~9 Hz) p/ velocidades angulares wx e wy
+const float ALPHA_RATE_Z    = 0.20f;   // Filtro IIR p/ taxa de Yaw
+const float GYRO_Z_DEADZONE = 0.35f;   // Deadzone anti-deriva na integracao do Yaw parado [°/s]
 const float ACC_GATE_LO     = 0.80f; // Limite inferior de confianca do acelerometro [g]
 const float ACC_GATE_HI     = 1.20f; // Limite superior de confianca do acelerometro [g]
 
@@ -476,25 +479,28 @@ void passo_fusao(const MpuSample &s, float dt) {
   float wx_world = rate_x + COMP_YAW_SIGN * wz * sy_est;
   float wy_world = rate_y - COMP_YAW_SIGN * wz * sx_est;
 
-  // 4. Inclinacao gravimetrica pelo acelerometro com Gate Gravitacional (rejeita vibracoes)
+  // 4. [TRAZIDO DO YAWBOM] Filtro passa-baixas IIR (~9 Hz) nas velocidades angulares
+  // Corta o ruido residual antes de entrar na integral de atitude e no controlador de velocidade!
+  wx_est = (1.0f - ALPHA_RATE_XY) * wx_est + ALPHA_RATE_XY * wx_world;
+  wy_est = (1.0f - ALPHA_RATE_XY) * wy_est + ALPHA_RATE_XY * wy_world;
+
+  // 5. Inclinacao gravimetrica pelo acelerometro com Gate Gravitacional (rejeita vibracoes)
   acc_mag_g = sqrtf(s.ax * s.ax + s.ay * s.ay + s.az * s.az) / 16384.0f;
   bool acc_ok = (acc_mag_g > ACC_GATE_LO && acc_mag_g < ACC_GATE_HI);
 
   float th_acc_x = atan2f(-s.ax, s.az) - theta_offset_x;
   float th_acc_y = atan2f(s.ay, s.az) - theta_offset_y;
 
+  // 6. Fusao complementar com constante longa (tau ~ 10 s):
+  // Durante o balanco pendular, o angulo e 99.7% integrado da taxa filtrada (sem ruido),
+  // cruzando o zero estritamente no meio do ciclo real. O acc corrige a deriva DC lentamente.
   if (acc_ok) {
-    sx_est = ALPHA_FUSAO * (sx_est + wx_world * dt) + (1.0f - ALPHA_FUSAO) * th_acc_x;
-    sy_est = ALPHA_FUSAO * (sy_est + wy_world * dt) + (1.0f - ALPHA_FUSAO) * th_acc_y;
+    sx_est = ALPHA_FUSAO * (sx_est + wx_est * dt) + (1.0f - ALPHA_FUSAO) * th_acc_x;
+    sy_est = ALPHA_FUSAO * (sy_est + wy_est * dt) + (1.0f - ALPHA_FUSAO) * th_acc_y;
   } else {
-    sx_est += wx_world * dt;
-    sy_est += wy_world * dt;
+    sx_est += wx_est * dt;
+    sy_est += wy_est * dt;
   }
-
-  // 5. [TRAZIDO DO YAWBOM] Filtro passa-baixas IIR (~9 Hz) nas velocidades angulares wx_est e wy_est
-  // Corta mais de 75% do ruido residual antes de multiplicar por L_M e vel_kp!
-  wx_est = (1.0f - ALPHA_RATE_XY) * wx_est + ALPHA_RATE_XY * wx_world;
-  wy_est = (1.0f - ALPHA_RATE_XY) * wy_est + ALPHA_RATE_XY * wy_world;
 
   theta_total_deg = sqrtf(sx_est * sx_est + sy_est * sy_est) * (180.0f / PI);
 }
@@ -1183,13 +1189,12 @@ void loop() {
     pararBTS();
   }
 
-  MpuSample s = ler_mpu();
-
   // --- Malha fixa de 200 Hz (5 ms): Fusao + Controle XY + Controle Yaw ---
   if (now_us - last_swing_us >= SWING_INTERVAL_US) {
     float dt_swing = (now_us - last_swing_us) * 1e-6f;
     last_swing_us = now_us;
 
+    MpuSample s = ler_mpu();
     if (s.ok) {
       passo_fusao(s, dt_swing);
       talvez_rebias(s);
@@ -1217,14 +1222,16 @@ void loop() {
       float vel_ang = sqrtf(wx_est * wx_est + wy_est * wy_est);
       if (vel_ang > (2.0f * PI / 180.0f)) cruzamento_armado = true;
       if (cruzamento_armado && vel_ang < (0.5f * PI / 180.0f)) {
-        cruzamento_armado = false;
         unsigned long t_cruz = micros();
-        float T_amostra = (t_cruz - ultimo_cruzamento_us) * 2e-6f;
-        ultimo_cruzamento_us = t_cruz;
-        if (T_amostra > 1.2f && T_amostra < 6.0f) {
-          periodo_medido = (periodo_medido == 0.0f)
-                           ? T_amostra
-                           : 0.7f * periodo_medido + 0.3f * T_amostra;
+        if (t_cruz - ultimo_cruzamento_us > 800000UL) {
+          cruzamento_armado = false;
+          float T_amostra = (t_cruz - ultimo_cruzamento_us) * 2e-6f;
+          ultimo_cruzamento_us = t_cruz;
+          if (T_amostra > 1.2f && T_amostra < 7.5f) {
+            periodo_medido = (periodo_medido == 0.0f)
+                             ? T_amostra
+                             : 0.7f * periodo_medido + 0.3f * T_amostra;
+          }
         }
       }
     }

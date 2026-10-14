@@ -31,7 +31,7 @@ esfera real sobreposta na mesma tela.
 | Raio da esfera | **0,60 m** | `SphereParams.radius` | conforme hardware |
 | Braço eixo→propulsores | **0,70 m** | `ActuatorParams.arm_radius` | conforme hardware |
 | Momento de inércia em ψ | (2/5)·m·r² = **1,728 kg·m²** | `SphereParams.inertia_z` | estimativa (`--inertia` medido rescala ganhos) |
-| Comprimento do cabo L | **2,0 m** inicial (0,5–6 m ajustável via `L<val>` ou `t`) | `L_M`, `RopeParams.length` | calibrável |
+| Comprimento do cabo L | **5,0 m** (0,5–6 m ajustável via `L<val>` ou `t`) | `L_M`, `RopeParams.length` | calibrável |
 | Torção do cabo | **0** (heading livre, por gyro) | `RopeParams` | conforme hardware |
 | Força por hélice @ ±500 µs | **18 N** (curva quadrática, ré 60%, dz 30 µs) | `ActuatorParams` / `main.cpp` | simétrico de fábrica |
 | Faixa de PWM segura | **1500 ± 450 µs** (1050 a 1950 µs, reserva swing 400 µs, yaw 300 µs) | `PWM_LIMIT_US` / `SWING_RESERVE_US` | calibrado |
