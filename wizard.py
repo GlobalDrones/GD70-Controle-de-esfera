@@ -58,7 +58,7 @@ PULSE_LEVELS = (240, 170, 100)
 PULSE_MS = 600
 BASELINE_FRAMES = 25   # 1,00 s @ 25 Hz (melhora o condicionamento do ajuste senoidal)
 PULSE_FRAMES = 15      # 0,60 s
-SETTLE_FRAMES = 45     # 1,80 s (permite amortecimento residual entre pulsos)
+SETTLE_FRAMES = 25     # 1,00 s de amortecimento inicial mínimo
 ACTUATOR_TAU_S = 0.12  # atraso de 1ª ordem ESC+hélice (refinar na bancada)
 
 
@@ -126,6 +126,109 @@ def _leftover_at(coef, t_ms0, t_ms, omega):
     return row @ coef  # (2,)
 
 
+def wait_for_quiet(
+    transport: Transport,
+    max_timeout: float = 25.0,
+    quiet_rate_z: float = 0.8,
+    quiet_tilt: float = 1.2,
+    consecutive_frames: int = 15,
+    verbose: bool = True,
+) -> None:
+    """Aguarda a rotação de yaw (rate_z) e a inclinação quase zerarem.
+
+    Evita que o recuo elástico/torsional da corda e oscilações do pulso anterior
+    distorçam a medição do próximo pulso ou motor.
+    """
+    sim = getattr(transport, "sim", None)
+    if sim is not None:
+        collect(transport, 5)
+        return
+
+    quiet_count = 0
+    t0 = time.time()
+    last_print = 0.0
+
+    while True:
+        f = next_frame(transport)
+        wxy = math.hypot(f.wx_dps, f.wy_dps)
+        rz = abs(f.rate_z_dps)
+
+        if rz <= quiet_rate_z and wxy <= quiet_tilt:
+            quiet_count += 1
+            if quiet_count >= consecutive_frames:
+                if verbose and (time.time() - t0) > 1.2:
+                    print(f"  [repouso OK] rotação estabilizada (|rate_z|={rz:.2f}°/s, |w_xy|={wxy:.2f}°/s)          ")
+                break
+        else:
+            quiet_count = 0
+
+        now = time.time()
+        if verbose and (now - last_print) >= 0.8:
+            last_print = now
+            print(f"  Aguardando repouso... (|rate_z|={rz:.1f}°/s, |w_xy|={wxy:.1f}°/s) [{int(now - t0)}s]  ", end="\r")
+
+        if now - t0 > max_timeout:
+            if verbose:
+                print(f"\n  [aviso] Timeout de repouso ({max_timeout:.0f}s): prosseguindo com |rate_z|={rz:.1f}°/s, |w_xy|={wxy:.1f}°/s.")
+            break
+
+
+def manual_stop_gate(
+    transport: Transport,
+    motor_label: str = "",
+    countdown_sec: int = 3,
+    quiet_rate_z: float = 1.0,
+    quiet_tilt: float = 1.5,
+    consecutive_frames: int = 15,
+    verbose: bool = True,
+) -> None:
+    """Solicita parada manual da esfera, aguarda a velocidade zerar
+
+    e faz contagem regressiva de 3s para o operador soltar a esfera antes do próximo motor.
+    """
+    sim = getattr(transport, "sim", None)
+    if sim is not None:
+        collect(transport, 5)
+        return
+
+    if verbose:
+        print("\n" + "=" * 60)
+        target = f" para o Motor {motor_label}" if motor_label else ""
+        print(f"  >>> ZERE A VELOCIDADE DA ESFERA MANUALMENTE{target} <<<")
+        print("  Segure a esfera parada até a velocidade zerar.")
+        print("=" * 60)
+
+    quiet_count = 0
+    last_print = 0.0
+
+    while True:
+        f = next_frame(transport)
+        wxy = math.hypot(f.wx_dps, f.wy_dps)
+        rz = abs(f.rate_z_dps)
+
+        if rz <= quiet_rate_z and wxy <= quiet_tilt:
+            quiet_count += 1
+            if quiet_count >= consecutive_frames:
+                break
+        else:
+            quiet_count = 0
+
+        now = time.time()
+        if verbose and (now - last_print) >= 0.5:
+            last_print = now
+            print(f"  Zere a velocidade... (|rate_z|={rz:4.1f}°/s, |w_xy|={wxy:4.1f}°/s)", end="\r")
+
+    transport.flush_input()
+    if verbose:
+        print("\n  [OK] Velocidade zerada! Solte a esfera.")
+        for remaining in range(countdown_sec, 0, -1):
+            print(f"  >> Próximo motor em {remaining}s...", end="\r")
+            collect(transport, 25)  # 1s de telemetria a 25Hz mantendo buffer drenado
+        print("  >> Próximo motor iniciando agora!                                \n")
+
+    transport.flush_input()
+
+
 def run_pulse(transport: Transport, motor: int, us: int) -> dict:
     """Um pulso do wizard: linha de base → pulso → repouso.
 
@@ -163,7 +266,9 @@ def run_pulse(transport: Transport, motor: int, us: int) -> dict:
         print(f"  [AVISO] Pulso {us:+d} us (motor {motor}): flag de pulso não detectada na telemetria.")
         during = collect(transport, PULSE_FRAMES)
 
+    # Amortecimento inicial mínimo e espera ativa de rotação quase zerar
     collect(transport, SETTLE_FRAMES)
+    wait_for_quiet(transport, max_timeout=25.0, quiet_rate_z=0.8, quiet_tilt=1.2, verbose=True)
 
     body_resp = []
     ratez = []
@@ -188,8 +293,9 @@ def identify(transport: Transport, verbose: bool = True) -> List[MotorCalib]:
     transport.flush_input()
 
     for motor, label in enumerate(cluster.LABELS):
+        manual_stop_gate(transport, motor_label=label, countdown_sec=3, verbose=verbose)
         if verbose:
-            print(f"\n=== Motor {label} (índice {motor}) ===")
+            print(f"=== Motor {label} (índice {motor}) ===")
         pulses = [run_pulse(transport, motor, u) for u in PULSE_LEVELS]
         pulses += [run_pulse(transport, motor, -u) for u in reversed(PULSE_LEVELS)]
 
