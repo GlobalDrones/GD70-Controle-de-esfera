@@ -1216,6 +1216,9 @@
 
         let yaw_us = 0.0;
         if (this.heading_enabled) {
+          if (this._vision_pointing_error !== null) {
+            this._heading_setpoint = wrapToPi(state.heading + this._vision_pointing_error);
+          }
           const angle_err = this._vision_pointing_error !== null
             ? this._vision_pointing_error
             : wrapToPi(this._heading_setpoint - state.heading);
@@ -2144,12 +2147,16 @@
       // 7. Os 3 Propulsores e Setas de Empuxo (vermelho = frente, azul = ré, como em interactive.py)
       const f_max = cluster.maxThrust || 18.0;
       const armR = cluster.arm_radius;
+      // Posição física de montagem dos motores na carcaça:
+      // Motor A perpendicular ao eixo X (na direção -Y, empuxo para +X gera +Yaw): -90° (-pi/2)
+      // Motor B a +120° de A: +30° (+pi/6)
+      // Motor C a -120° de A: +150° (+5*pi/6)
+      const MOTOR_MOUNT_ANGLES = [-Math.PI / 2, Math.PI / 6, 5 * Math.PI / 6];
       for (let j = 0; j < 3; j++) {
         const m = cluster.motors[j];
         const tx_b = m.thrust_dir[0], ty_b = m.thrust_dir[1];
-        // Posição de montagem a 90° atrás da direção de empuxo (actuators.py: [arm*ty, -arm*tx, 0])
-        const mx_b = armR * ty_b;
-        const my_b = -armR * tx_b;
+        const mx_b = armR * Math.cos(MOTOR_MOUNT_ANGLES[j]);
+        const my_b = armR * Math.sin(MOTOR_MOUNT_ANGLES[j]);
 
         const mx = center[0] + (cPsi * mx_b - sPsi * my_b);
         const my = center[1] + (sPsi * mx_b + cPsi * my_b);
@@ -2276,13 +2283,58 @@
       ctxXY.lineTo(curX + 28 * Math.cos(psi), curY - 28 * Math.sin(psi));
       ctxXY.stroke();
 
+      // Contorno da esfera no radar
       ctxXY.beginPath();
-      ctxXY.arc(curX, curY, 5.5, 0, TWO_PI);
+      ctxXY.arc(curX, curY, Math.max(6, plant.radius * pxPerM), 0, TWO_PI);
+      ctxXY.strokeStyle = "rgba(251, 146, 60, 0.45)";
+      ctxXY.lineWidth = 1.2;
+      ctxXY.stroke();
+
+      // Ponto central da esfera
+      ctxXY.beginPath();
+      ctxXY.arc(curX, curY, 4.0, 0, TWO_PI);
       ctxXY.fillStyle = "#06b6d4";
       ctxXY.fill();
       ctxXY.strokeStyle = "#ffffff";
-      ctxXY.lineWidth = 1.5;
+      ctxXY.lineWidth = 1.2;
       ctxXY.stroke();
+
+      // Os 3 propulsores a 120° com vetores de empuxo no radar
+      const cPsiRadar = Math.cos(psi), sPsiRadar = Math.sin(psi);
+      const f_max_radar = cluster.maxThrust || 18.0;
+      for (let j = 0; j < 3; j++) {
+        const m = cluster.motors[j];
+        const mx_b = cluster.arm_radius * Math.cos(MOTOR_MOUNT_ANGLES[j]);
+        const my_b = cluster.arm_radius * Math.sin(MOTOR_MOUNT_ANGLES[j]);
+        const mx_w = cPsiRadar * mx_b - sPsiRadar * my_b;
+        const my_w = sPsiRadar * mx_b + cPsiRadar * my_b;
+        const m_px = curX + mx_w * pxPerM;
+        const m_py = curY - my_w * pxPerM;
+
+        ctxXY.beginPath();
+        ctxXY.arc(m_px, m_py, 3, 0, TWO_PI);
+        ctxXY.fillStyle = "#e2e8f0";
+        ctxXY.fill();
+
+        ctxXY.fillStyle = "rgba(255, 255, 255, 0.85)";
+        ctxXY.font = "bold 9px Consolas, monospace";
+        ctxXY.fillText(m.label.toUpperCase(), m_px + 4, m_py - 3);
+
+        const f = activeState.thrusts[j];
+        if (Math.abs(f) > 0.05) {
+          const tx_b = m.thrust_dir[0], ty_b = m.thrust_dir[1];
+          const dx_w = cPsiRadar * tx_b - sPsiRadar * ty_b;
+          const dy_w = sPsiRadar * tx_b + cPsiRadar * ty_b;
+          const sign = f >= 0 ? 1.0 : -1.0;
+          const arrowLen = 6 + 18 * (Math.abs(f) / f_max_radar);
+          ctxXY.beginPath();
+          ctxXY.strokeStyle = f >= 0 ? "#ef4444" : "#3b82f6";
+          ctxXY.lineWidth = 2.0;
+          ctxXY.moveTo(m_px, m_py);
+          ctxXY.lineTo(m_px + sign * arrowLen * dx_w, m_py - sign * arrowLen * dy_w);
+          ctxXY.stroke();
+        }
+      }
     }
 
     // =========================================================================

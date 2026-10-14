@@ -93,8 +93,13 @@ def test_bridge_broadcast_and_reverse_command():
     br.start()
     try:
         client = socket.create_connection(("127.0.0.1", 19999), timeout=3)
-        client.settimeout(2.0)
-        time.sleep(0.3)  # handler registrar o cliente
+        client.settimeout(3.0)
+        deadline = time.time() + 2.0
+        while time.time() < deadline:
+            with br._lock:
+                if len(br._clients) > 0:
+                    break
+            time.sleep(0.05)
 
         br.broadcast("TEL,42")
         data = client.recv(256).decode().strip()
