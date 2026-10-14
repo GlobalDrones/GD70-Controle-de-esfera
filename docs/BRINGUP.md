@@ -18,17 +18,17 @@ Não pule etapas. Cada uma depende da anterior funcionar.
 
 ## Visão geral das etapas
 
-| Etapa | O que é testado | Bateria dos ESCs |
-|---|---|---|
-| 0 | Simulador no computador (ensaio geral) | desligada |
-| 1 | Compilar e gravar o firmware no STM | desligada |
-| 2 | Comunicação com o STM (comandos e telemetria) | desligada |
-| 3 | Sensores de inclinação e heading | desligada |
-| 4 | Raspberry Pi: visão, ponte de rede e rádio | desligada |
-| 5 | Primeiro giro dos motores (sem hélices) | **ligada** |
-| 6 | Calibração dos motores com o wizard | ligada |
-| 7 | Controle em malha fechada | ligada |
-| 8 | Controle usando a visão | ligada |
+| Etapa | O que é testado | Bateria dos ESCs | Status de Bancada |
+|---|---|---|---|
+| 0 | Simulador no computador (ensaio geral) | desligada | Concluído |
+| 1 | Compilar e gravar o firmware no STM | desligada | Concluído (v2 consolidada) |
+| 2 | Comunicação com o STM (comandos e telemetria) | desligada | Concluído (TEL 25 Hz) |
+| 3 | Sensores de inclinação e heading | desligada | Concluído (DLPF 20 Hz + calib 'z') |
+| 4 | Raspberry Pi: visão, ponte de rede e rádio | desligada | Concluído (TCP 9999 + VNC 10 FPS) |
+| 5 | Primeiro giro dos motores (sem hélices) | **ligada** | Concluído (Motor C invertido identificado) |
+| 6 | Calibração dos motores com o wizard | ligada | Concluído (Parada manual executada) |
+| 7 | Controle em malha fechada | ligada | **Próximo passo na bancada** |
+| 8 | Controle usando a visão | ligada | Pendente de malha fechada estável |
 
 ---
 

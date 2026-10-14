@@ -31,26 +31,24 @@ esfera real sobreposta na mesma tela.
 | Raio da esfera | **0,60 m** | `SphereParams.radius` | conforme hardware |
 | Braço eixo→propulsores | **0,70 m** | `ActuatorParams.arm_radius` | conforme hardware |
 | Momento de inércia em ψ | (2/5)·m·r² = **1,728 kg·m²** | `SphereParams.inertia_z` | estimativa (`--inertia` medido rescala ganhos) |
-| Comprimento do cabo L | 1 m (0,5–6 m, **só entre sessões**) | `RopeParams.length`, `--length` | medido |
+| Comprimento do cabo L | **2,0 m** inicial (0,5–6 m ajustável via `L<val>` ou `t`) | `L_M`, `RopeParams.length` | calibrável |
 | Torção do cabo | **0** (heading livre, por gyro) | `RopeParams` | conforme hardware |
-| Força por hélice @ ±500 µs | **18 N** (curva quadrática, ré 60%, dz 30 µs) | `ActuatorParams` | **PROVISÓRIO — wizard calibra por motor** |
-| Faixa de PWM | **1500 ± 500 µs (faixa completa do ESC)** | `ActuatorParams.pwm_limit_us` / `PWM_LIMIT_US` | decisão da equipe — **verificar corrente/térmica dos F45A na 1ª sessão** |
-| Travamento direcional do ESC (latch) | **~±60 µs** (PWM ~1440–1560): comando pequeno trava o sentido, só comando válido no oposto destrava | `MotorCalib.latch_us` (Python) / `ESC_LATCH_US` (firmware) | observação de bancada — **wizard medirá por ESC** |
-| MPU6050 | topo da esfera, junto ao pino | firmware | inclinômetro quase ideal |
+| Força por hélice @ ±500 µs | **18 N** (curva quadrática, ré 60%, dz 30 µs) | `ActuatorParams` / `main.cpp` | simétrico de fábrica |
+| Faixa de PWM segura | **1500 ± 450 µs** (1050 a 1950 µs, reserva swing 400 µs, yaw 300 µs) | `PWM_LIMIT_US` / `SWING_RESERVE_US` | calibrado |
+| Travamento direcional do ESC (latch) | **~±60 µs** (PWM ~1440–1560): sub-piso vai a neutro com rampa suave | `ESC_LATCH_US` / `ESC_MIN_YAW_US` | atenuado |
+| MPU6050 | topo da esfera, **DLPF 20 Hz de hardware ativado** | `firmware/main.cpp` | I2C Fast 400 kHz |
 
-**Autoridade resultante** (com os defaults provisórios): envelope de força
-≈ 15,5 N (13% do peso) e torque de heading ≈ 25 N·m. A faixa completa foi
-liberada em substituição ao clamp conservador de ±250 µs (que deixava o
-envelope em 3,2 N — acomodação de perturbações demorava 15+ s; agora ~2,6 s).
+**Autoridade resultante**: envelope de força ≈ 15,5 N (13% do peso) e torque de heading ≈ 25 N·m.
+O firmware consolidado opera com clamp de segurança em ±450 µs, garantindo resposta rápida sem risco térmico aos ESCs F45A.
 
 ## Interface de hardware (motores)
 
-- Motores **a**, **b**, **c** = BF(PA0), AS(PA15), TR(PA1); o motor **a
-  empurra no +X do sensor** (verificado fisicamente), b/c a ±120°.
-- PWM bidirecional: **1500 µs = parado, 2000/1000 µs = full speed ±**.
-- Curva quadrática por motor com zona morta e eficiência de ré própria —
-  **nada assume que os 3 motores foram soldados/montados iguais**: o wizard
-  mede cada um e o firmware guarda calibração por motor em RAM (comando M).
+- Motores **a**, **b**, **c** = BF (PA0), AS (PA15), TR (PA1):
+  - **Motor a (BF, PA0)**: empurra no **+X do corpo** ($0^\circ$), `yaw_sign = +1.0`.
+  - **Motor b (AS, PA15)**: empurra em **+120°** (trás-esquerda), `yaw_sign = +1.0`.
+  - **Motor c (TR, PA1)**: montado a **-120°** (trás-direita), **invertido de fábrica** (hélice/ESC CW): opera com `yaw_sign = -1.0` e vetor tangencial compensado `(+0.5, +0.866)`.
+- PWM bidirecional: **1500 µs = parado, 1950/1050 µs = full speed ±**.
+- Curva quadrática com zona morta e modelo simétrico de fábrica, desacoplando Yaw e Anti-Balanço desde o boot.
 
 ## Estrutura
 
@@ -162,57 +160,54 @@ python wizard.py --serial COM7    # bancada: esfera pendurada e LIVRE
 python wizard.py --tcp <rasp> --push
 ```
 
-**Mitigação do travamento do ESC já ativa** (paridade Python/firmware): o
-menor µs não-nulo comandado nasce FORA da faixa de travamento (latch + 15 µs
-de margem) — comandos sub-piso viram neutro, tanto no caminho de força (gate
-por motor) quanto no µs final (quantização anti-banda de swing+yaw). O
-caminho do wizard não quantiza de propósito: o modelo do ESC fica exposto
-para ser medido (rotina de caracterização do latch no wizard: planejada).
+**Novo fluxo com parada manual entre motores:**
+O wizard guia o operador no terminal para zerar a velocidade da esfera antes de cada motor:
+- Exibe `Zere a velocidade...` e monitora em tempo real a quietude (`|rate_z| <= 1.0` °/s e `|w_xy| <= 1.5` °/s por 15 frames seguidos);
+- Confirma com `[OK] Velocidade zerada! Solte a esfera.`;
+- Realiza contagem regressiva de 3 s mantendo o buffer de telemetria drenado (`flush_input()`);
+- Dispara os pulsos em ±100/170/240 µs (600 ms cada) sincronizados pelo bit `FLAG_WIZARD = 16`;
+- Aguarda ativamente o repouso do pêndulo entre pulsos (`wait_for_quiet()`) antes do próximo passo.
+Saída: `calib.json` saneado e push opcional à RAM do STM.
 
-Pulsa cada motor em ±100/170/240 µs (600 ms, loops desligados), mede a
-resposta pela própria telemetria e devolve **por motor**: direção de empuxo
-(com transporte por amostra para o corpo — o pulso gira a esfera), sinal de
-yaw, curva µs→N frente/ré e zona morta (com correção analítica do atraso do
-atuador e subtração do sinusóide de oscilação residual). Saída: `calib.json`
-(mesmo formato do simulador) e push opcional ao STM.
+## Firmware Consolidado (firmware/main.cpp)
 
-## Firmware (firmware/main.cpp)
-
-Correções vs. firmware anterior: (1) `pos_error` nunca era calculado — PID de
-yaw morto; (2) força anti-balanço sem rotação mundo→corpo; (3) taxas no corpo
-vs ângulos em mundo; (4) deadzone na integração do yaw; (5) sem gate
-gravimétrico no acc; (6) calibração sem verificação de quietude; (7) atuador
-global → por motor; (8) I2C 100→400 kHz; (9) parser duplicado → unificado.
+Unifica a robustez comprovada do `mainYAWBOM` com o protocolo do Digital Twin:
+1. **Filtragem de Ruído Reforçada:**
+   - DLPF de hardware no MPU6050 (20 Hz, reg `0x1A = 0x04`): elimina ruídos estruturais das hélices diretamente no conversor AD do sensor;
+   - Filtro passa-baixas IIR (~9 Hz) em `wx_est` e `wy_est` (`ALPHA_RATE_XY = 0.22`): elimina >75% do ruído derivativo antes dos ganhos de controle.
+2. **Malha de Yaw Estável:**
+   - Erro angular calculado em graus com `wrap180` (corrige o bug do `wrap_pi` em graus);
+   - PID direto de posição (Kp=5.0, Ki=1.0, Kd=10.0) com termo derivativo em `-rate_z_filt` (sem trancos em degraus de setpoint);
+   - Zona morta angular de 2.5° com histerese (3.2°) e **reset imediato do integrador no cruzamento de zero** (elimina overshoot e ciclos-limite).
+3. **Anti-Balanço por Velocidade com Zona Morta de Prumo:**
+   - Freio viscoso ativo no mundo ($v̂ = L \cdot \omega_{\text{mundo}}$);
+   - Zona morta de repouso no prumo (< 0.60° e < 1.50 °/s): motores desligam em neutro (1500 µs) ao atingir estabilização.
+4. **Segurança e Mecanismos:**
+   - Watchdog de 250 ms na polia (Deadman Switch): desliga se o link cair;
+   - Cancelamento imediato do pulso do wizard no comando de emergência `k`.
 
 Comandos (USB e Serial2): `w/s/x` pinça · `a/d/c` polia · `e` AS5600 ·
 `m` teste de motores · `y` yaw on/off · `p|b` anti-balanço on/off · `k`
 **parada geral** · `z` calibra MPU (com gate de quietude) · `t` calibra L
 pelo período · `0` zera yaw desejado · `L<val>` comprimento · `<num>` degrau
-relativo de yaw · `G<idx> <val>` ganho · `R` lê ganhos · `V<b> <D>` visão ·
+de yaw · `G<idx> <val>` ganho · `R` lê ganhos · `V<b> <D>` visão ·
 `W<m> <us> <ms>` pulso do wizard · `M<m> ...` calibração por motor.
 Telemetria 25 Hz: `TEL,t_ms,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,b,c,L,D,flags`.
 
 Loops de controle **desligados no boot** — 'y'/'p' ligam.
 
-## Checklist de bancada (primeira sessão com o twin)
+## Checklist de bancada (Bring-up)
 
-1. **Flash + smoke test**: boot com loops OFF; 'm' (teste de motores) —
-   confirmar a↔PA0/b↔PA15/c↔PA1 e os sentidos.
-2. **Eixos do MPU**: inclinar a esfera em direção conhecida → sinais de
-   sx/sy na telemetria (TEL); girar a esfera inclinada à mão → sx/sy NÃO
-   podem girar junto (senão, inverter `COMP_YAW_SIGN` no firmware).
-3. **ESCs**: modo bidirecional 1500 neutro confirmado (calibração de faixa
-   já feita); testar refresh > 50 Hz no futuro (reduz o atraso).
-4. **Wizard** (`python wizard.py --serial COM7 --push`): substitui TODOS os
-   chutes de atuador; conferir o relatório contra o esperado (~18 N/hélice).
-5. **'z'** (calibração com quietude) e **'t'** (período→L, cruzar com o L da
-   sessão).
-6. **Telemetria + fantasma**: anti-balanço OFF, empurrar a esfera — o
-   fantasma do twin deve rastrear (valida fusão + telemetria).
-7. **Anti-balanço ON** com ganhos conservadores (defaults): confirmar a
-   DIREÇÃO do amortecimento; subir ganhos ao vivo pelo twin.
-8. **Yaw**: degraus ±15° (referência interna); com a visão, bearing da linha.
-9. **Saturação**: comando grande → PWM nos clamps 1000/2000, sem chatter.
+- [x] **Etapa 0 — Ensaio no simulador**: paridade validada.
+- [x] **Etapa 1 — Gravação do Firmware**: PlatformIO configurado.
+- [x] **Etapa 2 — Comunicação e Telemetria**: TEL a 25 Hz sem `%f`.
+- [x] **Etapa 3 — Sensores**: MPU com DLPF 20 Hz e calibração por `z`.
+- [x] **Etapa 4 — Raspberry Pi**: ponte TCP (porta 9999), VNC ajustado (10 FPS).
+- [x] **Etapa 5 — Identificação de Motores (`m`)**: confirmada rotação, Motor A (+X), Motor B (+120°), Motor C (-120°, invertido de fábrica).
+- [x] **Etapa 6 — Wizard de Atuadores**: parada manual entre motores executada, calibração salva em `calib.json`.
+- [ ] **Etapa 7 — Primeira Malha Fechada (Próximo Passo)**:
+  1. Ligar anti-balanço (`p` ou `1` no twin) e empurrar a esfera: confirmar amortecimento rápido;
+  2. Ligar heading (`y` ou `2` no twin): aplicar degraus de 15° (`15\n` ou tecla `X`) e observar acomodação suave.
 
 ## Comportamento esperado (simulador, defaults provisórios, faixa completa do ESC)
 
