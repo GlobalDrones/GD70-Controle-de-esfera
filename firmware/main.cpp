@@ -565,6 +565,13 @@ void passo_controle_yaw(float dt) {
   // Calcula o erro em GRAUS com wrap180 (corrige o bug do wrap_pi em graus!)
   if (vision_fresh()) {
     pos_error_yaw = vision_bearing; // Erro direto da camera [graus]
+    // Sincroniza continuamente o setpoint com o heading absoluto do cabo:
+    // O cabo está na direção (yaw_gyro + vision_bearing).
+    // Conforme a visão centraliza o cabo (vision_bearing -> 0), desired_yaw converge
+    // para o heading real onde o cabo está. Se a visão perder o cabo (timeout 500 ms),
+    // desired_yaw já guardará este último heading, e o controle por gyro manterá
+    // exatamente essa direção sem salto angular nem giro de retorno!
+    desired_yaw = wrap180(yaw_gyro + vision_bearing);
   } else {
     pos_error_yaw = wrap180(desired_yaw - yaw_gyro);
   }
@@ -1214,7 +1221,11 @@ void loop() {
     } else {
       passo_controle_xy(dt_swing);
       passo_controle_yaw(dt_swing);
-      realizar_controle(F_cmd_x, F_cmd_y, yaw_us_cmd, yaw_gyro * (PI / 180.0f));
+      // F_cmd_x e F_cmd_y sao derivados de wx_est e wy_est (giroscopio no corpo).
+      // Portanto, F_cmd ja esta no referencial do CORPO da esfera!
+      // Passar psi_rad = 0.0f impede que a forca seja rotacionada por -yaw (FW-03),
+      // garantindo amortecimento viscoso perfeitamente alinhado em qualquer orientacao de Yaw.
+      realizar_controle(F_cmd_x, F_cmd_y, yaw_us_cmd, 0.0f);
     }
 
     // Medicao de periodo em oscilacao livre (quando anti-balanco desligado)

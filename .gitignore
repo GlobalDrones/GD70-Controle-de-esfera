@@ -10,3 +10,6 @@ docs/_body.pdf
 docs/_cover.pdf
 .DS_Store
 Thumbs.db
+.pio/
+*.elf
+*.bin

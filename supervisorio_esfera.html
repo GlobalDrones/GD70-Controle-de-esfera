@@ -526,7 +526,7 @@
         <div class="form-group">
           <label class="form-label">Cabo L (0.5–6.0 m):</label>
           <div style="display:flex; gap:3px;">
-            <input type="number" id="inputLengthL" class="form-control" value="1.0" min="0.5" max="6.0" step="0.1" style="width:100%;">
+            <input type="number" id="inputLengthL" class="form-control" value="5.0" min="0.5" max="6.0" step="0.1" style="width:100%;">
             <button class="btn btn-primary" onclick="applyLengthL()">L</button>
           </div>
         </div>
@@ -694,7 +694,7 @@
         </div>
         <div class="kpi-box">
           <span class="kpi-label">Cabo L / Dist. D</span>
-          <div class="kpi-value" style="font-size:0.84rem;"><span id="kpiLD">1.00m / —</span></div>
+          <div class="kpi-value" style="font-size:0.84rem;"><span id="kpiLD">5.00m / —</span></div>
         </div>
       </div>
 
@@ -725,7 +725,7 @@
         </div>
         <div class="motor-bar-item">
           <div class="motor-bar-label">
-            <span style="color:#3b82f6">Motor c — TR (-120°, PA1):</span>
+            <span style="color:#3b82f6">Motor c — TR (-120°, PA1, invertido):</span>
             <span id="lblMotorC">1500 µs (0.0 N)</span>
           </div>
           <div class="progress-bar-bg">
@@ -808,13 +808,13 @@
         this.mass = 12.0;
         this.radius = 0.60;
         this.inertia_z = 1.728;
-        this.length = 1.0;
+        this.length = 5.0;
         this.gravity = 9.81;
         this.torsional_stiffness = 0.0;
         this.torsional_damping = 0.0;
         this._vel_mult = 0.0;
         this.state = {
-          position: [0.0, 0.0, -1.0],
+          position: [0.0, 0.0, -5.0],
           velocity: [0.0, 0.0, 0.0],
           heading: 0.0,
           heading_rate: 0.0
@@ -943,10 +943,10 @@
     class ThrusterCluster {
       constructor() {
         this.pwm_neutral_us = 1500.0;
-        this.pwm_limit_us = 500.0;
-        this.swing_reserve_us = 490.0;
-        this.yaw_reserve_us = 300.0;
-        this.f_at_500us = 18.0;
+        this.pwm_limit_us = 450.0;
+        this.swing_reserve_us = 400.0;
+        this.yaw_reserve_us = 200.0;
+        this.f_at_500us = 3.9;
         this.reverse_ratio = 0.60;
         this.deadzone_us = 30.0;
         this.arm_radius = 0.70;
@@ -963,13 +963,14 @@
         const dirs = [
           [1.0, 0.0],
           [-0.5, Math.sqrt(3.0) / 2.0],
-          [-0.5, -Math.sqrt(3.0) / 2.0]
+          [0.5, Math.sqrt(3.0) / 2.0] // Motor c invertido de fábrica
         ];
+        const yaw_signs = [1.0, 1.0, -1.0];
         const labels = ["a", "b", "c"];
         this.motors = labels.map((lbl, i) => ({
           label: lbl,
           thrust_dir: dirs[i],
-          yaw_sign: 1.0,
+          yaw_sign: yaw_signs[i],
           kf_fwd: kf_fwd,
           kf_rev: kf_rev,
           deadzone_us: this.deadzone_us,
@@ -1159,24 +1160,25 @@
       constructor(cluster) {
         this.cluster = cluster;
         this.gains = {
-          vel_kp: 45.0,
-          vel_ki: 2.2,
+          vel_kp: 18.0,
+          vel_ki: 0.0,
           vel_kd: 0.0,
-          head_angle_kp: 2.5,
-          head_decel: 1.5,
-          head_rate_limit: 2.5,
-          head_rate_kp_us: 900.0,
-          head_rate_ki_us: 2000.0
+          head_angle_kp: 5.0,
+          head_decel: 1.0,
+          head_rate_limit: 10.0,
+          head_rate_kp_us: 0.6667,
+          head_rate_ki_us: 400.0
         };
         this.xy_enabled = true;
         this.heading_enabled = true;
         this._heading_setpoint = 0.0;
         this._vision_pointing_error = null;
+        this._integral_err_yaw = 0.0;
+        this._last_err_yaw = 0.0;
 
         const f_lim = 0.8 * cluster.maxNetForce;
         this.pid_vx = new PIDController(this.gains.vel_kp, this.gains.vel_ki, this.gains.vel_kd, f_lim);
         this.pid_vy = new PIDController(this.gains.vel_kp, this.gains.vel_ki, this.gains.vel_kd, f_lim);
-        this.pid_heading_rate = new PIDController(this.gains.head_rate_kp_us, this.gains.head_rate_ki_us, 0.0, cluster.yaw_reserve_us);
       }
 
       syncPIDGains() {
@@ -1184,14 +1186,13 @@
         const f_lim = 0.8 * this.cluster.maxNetForce;
         this.pid_vx.kp = g.vel_kp; this.pid_vx.ki = g.vel_ki; this.pid_vx.kd = g.vel_kd; this.pid_vx.output_limit = f_lim;
         this.pid_vy.kp = g.vel_kp; this.pid_vy.ki = g.vel_ki; this.pid_vy.kd = g.vel_kd; this.pid_vy.output_limit = f_lim;
-        this.pid_heading_rate.kp = g.head_rate_kp_us;
-        this.pid_heading_rate.ki = g.head_rate_ki_us;
       }
 
       setHeadingDeg(deg) {
         this._heading_setpoint = wrapToPi(deg2rad(deg));
         this._vision_pointing_error = null;
-        this.pid_heading_rate.reset();
+        this._integral_err_yaw = 0.0;
+        this._last_err_yaw = 0.0;
       }
 
       setPointingErrorDeg(bearingDeg) {
@@ -1212,14 +1213,28 @@
           const angle_err = this._vision_pointing_error !== null
             ? this._vision_pointing_error
             : wrapToPi(this._heading_setpoint - state.heading);
-          const abs_err = Math.abs(angle_err);
-          const rate_mag = Math.min(
-            this.gains.head_angle_kp * abs_err,
-            Math.sqrt(2.0 * this.gains.head_decel * abs_err),
-            this.gains.head_rate_limit
-          );
-          this.pid_heading_rate.setpoint = angle_err >= 0 ? rate_mag : -rate_mag;
-          yaw_us = this.pid_heading_rate.update(state.heading_rate, dt);
+          const err_deg = rad2deg(angle_err);
+
+          // Termo P
+          const P = this.gains.head_angle_kp * err_deg;
+
+          // Termo I com reset imediato no cruzamento de zero (paridade YAWBOM)
+          this._integral_err_yaw = (this._integral_err_yaw || 0.0) + err_deg * dt;
+          if ((err_deg > 0.0 && (this._last_err_yaw || 0.0) < 0.0) ||
+              (err_deg < 0.0 && (this._last_err_yaw || 0.0) > 0.0)) {
+            this._integral_err_yaw = 0.0;
+          }
+          const max_int = this.gains.head_rate_ki_us;
+          this._integral_err_yaw = Math.max(-max_int, Math.min(max_int, this._integral_err_yaw));
+          const I = this.gains.head_decel * this._integral_err_yaw;
+
+          // Termo D sobre a taxa de giro em Z
+          const D = -this.gains.head_rate_limit * rad2deg(state.heading_rate);
+          this._last_err_yaw = err_deg;
+
+          const raw_yaw = P + I + D;
+          yaw_us = this.gains.head_rate_kp_us * raw_yaw;
+          yaw_us = Math.max(-this.cluster.yaw_reserve_us, Math.min(this.cluster.yaw_reserve_us, yaw_us));
         }
 
         return {
@@ -1253,7 +1268,7 @@
     // Estado instantâneo exibido no 3D, Radar XY e KPIs (alimentado pelo Sim OU pelo Real)
     const activeState = {
       t: 0.0,
-      px: 0.0, py: 0.0, pz: -1.0,
+      px: 0.0, py: 0.0, pz: -5.0,
       vx: 0.0, vy: 0.0, vz: 0.0,
       sx_deg: 0.0, sy_deg: 0.0,
       yaw_deg: 0.0, yaw_des_deg: 0.0,
@@ -1261,7 +1276,7 @@
       pwm: [1500, 1500, 1500],
       thrusts: [0.0, 0.0, 0.0],
       ext_fx: 0.0, ext_fy: 0.0,
-      L_m: 1.0,
+      L_m: 5.0,
       D_m: -1.0,
       bearing_deg: 0.0,
       xy_on: true,
@@ -1784,13 +1799,7 @@
       const iz = parseFloat(document.getElementById("inputInertia").value);
       if (iz > 0.05) {
         plant.inertia_z = iz;
-        const ratio = iz / REFERENCE_INERTIA_Z;
-        controller.gains.head_rate_kp_us = 900.0 * ratio;
-        controller.gains.head_rate_ki_us = 2000.0 * ratio;
-        controller.gains.head_decel = 1.5 / ratio;
-        controller.syncPIDGains();
-        renderGainsGrid();
-        logMsg(`Inércia Iz = ${iz.toFixed(3)} kg·m² aplicada (ganhos de heading reescalados).`);
+        logMsg(`Inércia Iz = ${iz.toFixed(3)} kg·m² aplicada.`);
       }
     }
 
@@ -1799,7 +1808,8 @@
       const d = parseFloat(document.getElementById("inputVisD").value);
       visionState = { active: true, bearing_deg: b, D_m: d, last_t: simTime };
       controller.setPointingErrorDeg(b);
-      sendRawCmd(`V${b.toFixed(3)}${d.toFixed(3)}`);
+      // Contrato V<bearing> <D> exige espaço entre o bearing e a distância
+      sendRawCmd(`V${b.toFixed(2)} ${d.toFixed(2)}`);
     }
 
     function loadCalibJson(event) {
@@ -1834,7 +1844,19 @@
       reader.readAsText(file);
     }
 
-    // --- Grade dos 8 Ganhos + Força Externa (G / + / -) ---
+    // --- Grade dos 8 Ganhos (paridade consolidada com firmware YAWBOM) + Força Externa ---
+    const GAIN_DESCS = [
+      "vel_kp (amortec.)",
+      "vel_ki (zero)",
+      "vel_kd (zero)",
+      "Kp Yaw (ângulo)",
+      "Ki Yaw (integral)",
+      "Kd Yaw (taxa Z)",
+      "Escala Yaw (2/3)",
+      "Max Int Yaw (µs)"
+    ];
+    const GAIN_STEPS = [1.0, 0.1, 0.1, 0.5, 0.2, 1.0, 0.05, 20.0];
+
     function getAdjustableList() {
       return [
         {
@@ -1845,14 +1867,14 @@
           gainIdx: -1
         },
         ...GAIN_NAMES.map((name, idx) => ({
-          label: name,
+          label: GAIN_DESCS[idx] || name,
           get: () => controller.gains[name],
           set: (v) => {
             controller.gains[name] = Math.max(0, v);
             controller.syncPIDGains();
             sendRawCmd(`G${idx} ${controller.gains[name].toPrecision(6)}`);
           },
-          step: Math.max(0.05, 0.1 * controller.gains[name]),
+          step: GAIN_STEPS[idx] || Math.max(0.05, 0.1 * controller.gains[name]),
           gainIdx: idx
         }))
       ];
