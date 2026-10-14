@@ -1179,6 +1179,12 @@
         const f_lim = 0.8 * cluster.maxNetForce;
         this.pid_vx = new PIDController(this.gains.vel_kp, this.gains.vel_ki, this.gains.vel_kd, f_lim);
         this.pid_vy = new PIDController(this.gains.vel_kp, this.gains.vel_ki, this.gains.vel_kd, f_lim);
+        this.pid_heading_rate = {
+          reset: () => {
+            this._integral_err_yaw = 0.0;
+            this._last_err_yaw = 0.0;
+          }
+        };
       }
 
       syncPIDGains() {
