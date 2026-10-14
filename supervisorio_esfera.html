@@ -774,6 +774,12 @@
     const F_MIN_N = 0.01;
     const LATCH_MARGIN_US = 15.0;
 
+    // Geometria física dos 3 propulsores a 120° na esfera:
+    // Motor A perpendicular ao eixo X (na direção -Y): -90° (-pi/2)
+    // Motor B a +120° de A: +30° (+pi/6)
+    // Motor C a -120° de A: +150° (+5*pi/6)
+    const MOTOR_MOUNT_ANGLES = [-Math.PI / 2, Math.PI / 6, 5 * Math.PI / 6];
+
     const GAIN_NAMES = [
       "vel_kp", "vel_ki", "vel_kd", "head_angle_kp",
       "head_decel", "head_rate_limit", "head_rate_kp_us", "head_rate_ki_us"
@@ -2147,11 +2153,6 @@
       // 7. Os 3 Propulsores e Setas de Empuxo (vermelho = frente, azul = ré, como em interactive.py)
       const f_max = cluster.maxThrust || 18.0;
       const armR = cluster.arm_radius;
-      // Posição física de montagem dos motores na carcaça:
-      // Motor A perpendicular ao eixo X (na direção -Y, empuxo para +X gera +Yaw): -90° (-pi/2)
-      // Motor B a +120° de A: +30° (+pi/6)
-      // Motor C a -120° de A: +150° (+5*pi/6)
-      const MOTOR_MOUNT_ANGLES = [-Math.PI / 2, Math.PI / 6, 5 * Math.PI / 6];
       for (let j = 0; j < 3; j++) {
         const m = cluster.motors[j];
         const tx_b = m.thrust_dir[0], ty_b = m.thrust_dir[1];
@@ -2481,7 +2482,7 @@
         `inclinação ${tiltMag.toFixed(2).padStart(6)}°  (sx ${s.sx_deg.toFixed(1)}°, sy${s.sy_deg.toFixed(1)}°)\n` +
         `|v|        ${speed.toFixed(3).padStart(6)} m/s\n` +
         `ψ          ${s.yaw_deg.toFixed(1).padStart(6)}°  (des.${s.yaw_des_deg.toFixed(1)}°)\n` +
-        `cabo L     ${s.L_m.toFixed(2).padStart(6)} m  \vert{} linha D:${dTxt}\n` +
+        `cabo L     ${s.L_m.toFixed(2).padStart(6)} m  | linha D: ${dTxt}\n` +
         `força ext  (${s.ext_fx >= 0 ? "+" : ""}${s.ext_fx.toFixed(1)}, ${s.ext_fy >= 0 ? "+" : ""}${s.ext_fy.toFixed(1)}) N\n` +
         `PWM (µs)   a:${s.pwm[0].toFixed(0)}  b:${s.pwm[1].toFixed(0)}  c:${s.pwm[2].toFixed(0)}`;
 
