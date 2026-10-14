@@ -166,7 +166,7 @@ ControllerGains ganhos = {
 
 // Parâmetros do cabo e limites
 const float L_MIN = 0.5f, L_MAX = 6.0f;
-float L_M = 1.0f;  // comprimento nominal da sessão [m]
+float L_M = 5.0f;  // comprimento nominal da sessão [m]
 
 // Compensação de yaw na fusão (ver checklist: girar a esfera inclinada à mão;
 // sx/sy NÃO podem girar junto. Se girarem, troque o sinal).

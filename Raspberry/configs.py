@@ -20,6 +20,17 @@ CAM1_ID = "/dev/video2"#"/dev/camera_direita"
 FRAME_W = 1280
 FRAME_H = 720
 
+# ===========================================================================
+# CONFIGURACOES DA JANELA DE VISUALIZACAO (importante p/ acesso via VNC)
+# Enviar a janela cheia a todo frame satura o TigerVNC. Ajuste por ambiente:
+#   ESFERA_GUI=0          -> sem janela (headless; teclas de comando desativadas)
+#   ESFERA_GUI_FPS=10     -> maximo de atualizacoes da janela por segundo
+#   ESFERA_GUI_SCALE=0.6  -> escala do painel exibido (so afeta a tela, nao a visao)
+# ===========================================================================
+GUI_ENABLED = os.environ.get("ESFERA_GUI", "1") != "0"
+GUI_MAX_FPS = float(os.environ.get("ESFERA_GUI_FPS", "10"))
+GUI_SCALE = float(os.environ.get("ESFERA_GUI_SCALE", "0.6"))
+
 cv2.setNumThreads(4)
 
 # ===========================================================================

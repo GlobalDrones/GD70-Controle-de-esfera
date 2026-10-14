@@ -64,7 +64,12 @@ def main():
     t_last = time.time()
     historico_angulos = deque(maxlen=1)
     media_angulo = 0
-    cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
+    if GUI_ENABLED:
+        cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
+    else:
+        print("[INFO] GUI desativada (ESFERA_GUI=0): sem janela, teclas de comando indisponiveis.")
+    gui_period = 1.0 / max(GUI_MAX_FPS, 0.1)
+    t_gui_last = 0.0
     
     # Se quiser testar o streamer de vídeo via FFmpeg, descomente as duas linhas abaixo:
     # streamer = iniciar_streamer(FRAME_W, FRAME_H, SCALES[scale_key])
@@ -223,8 +228,15 @@ def main():
         fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
         t_last = now
         
-        draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
-        cv2.imshow("Stereo Profundidade", display)
+        # Atualiza a janela so a GUI_MAX_FPS e em escala reduzida: sobre VNC,
+        # enviar o frame cheio a cada loop e o que trava o TigerVNC.
+        if GUI_ENABLED and (now - t_gui_last) >= gui_period:
+            t_gui_last = now
+            draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
+            if GUI_SCALE != 1.0:
+                display = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
+                                     interpolation=cv2.INTER_AREA)
+            cv2.imshow("Stereo Profundidade", display)
         
         k = cv2.waitKey(1) & 0xFF
         if k in [ord("q"), 27]:
