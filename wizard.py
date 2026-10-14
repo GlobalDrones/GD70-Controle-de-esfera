@@ -56,9 +56,9 @@ MASS_KG = 12.0
 # já é suficiente (resposta ~10–30 °/s vs ruído ~0,5 °/s).
 PULSE_LEVELS = (240, 170, 100)
 PULSE_MS = 600
-BASELINE_FRAMES = 12   # 0,48 s @ 25 Hz
+BASELINE_FRAMES = 25   # 1,00 s @ 25 Hz (melhora o condicionamento do ajuste senoidal)
 PULSE_FRAMES = 15      # 0,60 s
-SETTLE_FRAMES = 30     # 1,20 s
+SETTLE_FRAMES = 45     # 1,80 s (permite amortecimento residual entre pulsos)
 ACTUATOR_TAU_S = 0.12  # atraso de 1ª ordem ESC+hélice (refinar na bancada)
 
 
@@ -66,9 +66,9 @@ def lag_mean_factor(T: float, tau: float, omega: float) -> float:
     """g = mean(θ̇ | força rampada por lag τ) / mean(θ̇ | força constante).
 
     Forma fechada: θ̇(t) = (1/(mL))∫₀ᵗ F(s)·cos(ω(t−s))ds com F(s) =
-    F∞·(1−e^{−s/τ}); integrando duas vezes e normalizando pelo caso
-    constante. Sem isso, o kf medido sai ~τ-biased ao quadrado (F medido
-    0,8× ⇒ kf 0,64×).
+    F∞·(1−e^{−s/tau}); integrando duas vezes e normalizando pelo caso
+    constante. Sem isso, o kf medido sai ~tau-biased ao quadrado (F medido
+    0,8x => kf 0,64x).
     """
     if tau <= 1e-9:
         return 1.0
@@ -82,9 +82,10 @@ def lag_mean_factor(T: float, tau: float, omega: float) -> float:
     return float(k_lag / k_const)
 
 
-def next_frame(transport: Transport) -> TelemetryFrame:
+def next_frame(transport: Transport, timeout: float = 6.0) -> TelemetryFrame:
     """Próximo frame de telemetria (bomba o STM simulado, se houver)."""
     sim = getattr(transport, "sim", None)
+    t0 = time.time()
     while True:
         line = transport.read_line()
         if line:
@@ -95,6 +96,8 @@ def next_frame(transport: Transport) -> TelemetryFrame:
             sim.advance(0.02)
         else:
             time.sleep(0.004)
+        if time.time() - t0 > timeout:
+            raise TimeoutError(f"Timeout aguardando telemetria ({timeout:.1f}s sem dados válidos).")
 
 
 def collect(transport: Transport, n: int) -> List[TelemetryFrame]:
@@ -126,21 +129,40 @@ def _leftover_at(coef, t_ms0, t_ms, omega):
 def run_pulse(transport: Transport, motor: int, us: int) -> dict:
     """Um pulso do wizard: linha de base → pulso → repouso.
 
-    Medição em dois passos: (1) o sinusóide de oscilação livre residual é
-    ajustado na janela de baseline (frequência √(g/L) conhecida, eixo fixo
-    no MUNDO) e subtraído das amostras do pulso; (2) o resíduo limpo é
-    transportado para o CORPO por Rz(−yaw(t)) amostra a amostra — o pulso
-    gira a esfera ~15° em 600 ms, e transportar antes da média borraria a
-    direção.
+    Sincronizado pela telemetria real (FLAG_WIZARD = 16) e com flush de buffer
+    para evitar defasagem temporal entre envio e recepção.
     """
+    transport.flush_input()
     baseline = collect(transport, BASELINE_FRAMES)
     base_rz = float(np.mean([f.rate_z_dps for f in baseline]))
     base_L = float(np.mean([f.L_m for f in baseline]))
     omega = math.sqrt(9.80665 / base_L)
     coef, t0_ms = _fit_leftover_sinusoid(baseline, omega)
 
+    transport.flush_input()
     transport.write_line(protocol.cmd_wizard_pulse(motor, us, PULSE_MS))
-    during = collect(transport, PULSE_FRAMES)
+
+    during: List[TelemetryFrame] = []
+    t_timeout = time.time() + 2.5
+    saw_pulse = False
+
+    while True:
+        f = next_frame(transport)
+        if f.wizard_active:
+            saw_pulse = True
+            during.append(f)
+            if len(during) >= PULSE_FRAMES:
+                break
+        elif saw_pulse:
+            # Pulso encerrou no STM
+            break
+        elif time.time() > t_timeout:
+            break
+
+    if not saw_pulse:
+        print(f"  [AVISO] Pulso {us:+d} us (motor {motor}): flag de pulso não detectada na telemetria.")
+        during = collect(transport, PULSE_FRAMES)
+
     collect(transport, SETTLE_FRAMES)
 
     body_resp = []
@@ -163,6 +185,7 @@ def run_pulse(transport: Transport, motor: int, us: int) -> dict:
 def identify(transport: Transport, verbose: bool = True) -> List[MotorCalib]:
     cluster = build_system("nonlinear")[1]
     calibs: List[MotorCalib] = []
+    transport.flush_input()
 
     for motor, label in enumerate(cluster.LABELS):
         if verbose:
@@ -174,8 +197,8 @@ def identify(transport: Transport, verbose: bool = True) -> List[MotorCalib]:
         strongest = pulses[0]
         w_body = np.asarray(strongest["w_body"])
         norm = float(np.linalg.norm(w_body))
-        if norm < 1e-3:
-            print(f"[aviso] motor {label}: resposta ínfima — defaults mantidos")
+        if norm < 0.05:  # Ruído do giroscópio é ~0.1-0.5 °/s; 1e-3 aceitava ruído puro
+            print(f"[aviso] motor {label}: resposta ínfima ({norm:.4f} °/s < 0.05 °/s) — motor desligado ou sem empuxo. Defaults mantidos.")
             calibs.append(cluster.motors[motor])
             continue
         t_body = w_body / norm
@@ -214,8 +237,12 @@ def identify(transport: Transport, verbose: bool = True) -> List[MotorCalib]:
         kf_rev, dz_rev = fit(rev)
         default = cluster.motors[motor]
         if kf_fwd <= 0:
+            if verbose:
+                print(f"  [aviso] fit frente do motor {label} inconsistente — mantendo kf_fwd default")
             kf_fwd, dz_fwd = default.kf_fwd, default.deadzone_us
         if kf_rev <= 0:
+            if verbose:
+                print(f"  [aviso] fit ré do motor {label} inconsistente — mantendo kf_rev default")
             kf_rev, dz_rev = default.kf_rev, default.deadzone_us
         # dz do fit pode sair sem sentido (negativo/gigante) → limita ao plausível
         dz = float(np.mean([dz_fwd, dz_rev]))
@@ -268,7 +295,29 @@ def main(argv=None) -> None:
 
     print(f"Wizard de identificação via {transport.description}")
     print("AVISO: esfera deve estar pendurada e LIVRE; os loops serão desligados.")
-    calibs = identify(transport)
+
+    transport.flush_input()
+    test_f = next_frame(transport)
+    print(f">> Telemetria conectada: L = {test_f.L_m:.2f} m | Yaw = {test_f.yaw_deg:.1f}°")
+    if abs(test_f.L_m - 1.0) < 1e-3:
+        print("   [LEMBRETE]: Se o cabo físico não tiver 1.00 m, envie 'L<valor>' à STM antes da calibração.")
+
+    try:
+        calibs = identify(transport)
+    except KeyboardInterrupt:
+        print("\n[INTERROMPIDO] Cancelando wizard e enviando parada geral ('k')...")
+        try:
+            transport.write_line("k")
+        except Exception:
+            pass
+        raise
+    except Exception as exc:
+        print(f"\n[ERRO] Falha durante o wizard: {exc}. Enviando parada geral ('k')...")
+        try:
+            transport.write_line("k")
+        except Exception:
+            pass
+        raise
 
     # Salva no formato do cluster (com parâmetros default do cluster real).
     cluster = build_system("nonlinear")[1]

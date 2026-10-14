@@ -25,6 +25,10 @@ class Transport:
     def write_line(self, line: str) -> None:
         raise NotImplementedError
 
+    def flush_input(self) -> None:
+        """Descarta dados pendentes no buffer de entrada."""
+        pass
+
     def close(self) -> None:
         pass
 
@@ -48,6 +52,12 @@ class SerialTransport(Transport):
 
     def write_line(self, line: str) -> None:
         self._ser.write((line + "\n").encode("ascii"))
+
+    def flush_input(self) -> None:
+        try:
+            self._ser.reset_input_buffer()
+        except Exception:
+            pass
 
     def close(self) -> None:
         self._ser.close()
@@ -80,6 +90,20 @@ class TcpTransport(Transport):
     def write_line(self, line: str) -> None:
         self._sock.sendall((line + "\n").encode("ascii"))
 
+    def flush_input(self) -> None:
+        self._buf = b""
+        old_timeout = self._sock.gettimeout()
+        self._sock.settimeout(0.0)
+        try:
+            while True:
+                chunk = self._sock.recv(4096)
+                if not chunk:
+                    break
+        except (BlockingIOError, socket.timeout, OSError):
+            pass
+        finally:
+            self._sock.settimeout(old_timeout)
+
     def close(self) -> None:
         try:
             self._sock.close()
@@ -111,6 +135,13 @@ class SimTransport(Transport):
         for piece in line.split("\n"):
             if piece.strip():
                 self.sim.handle_command(piece.strip())
+
+    def flush_input(self) -> None:
+        while not self.sim.out_queue.empty():
+            try:
+                self.sim.out_queue.get_nowait()
+            except queue.Empty:
+                break
 
     @property
     def description(self) -> str:
