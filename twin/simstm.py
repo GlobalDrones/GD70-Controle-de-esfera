@@ -98,9 +98,14 @@ class SimSTM:
         state = self.plant.read_state()
         sx, sy = self.plant.tilt_angles(state)
         L = self.plant.rope.length
-        # taxas de inclinação no mundo ≈ v/L (mesma aproximação do v̂ do firmware)
-        wx = state.velocity[0] / L
-        wy = state.velocity[1] / L
+        # Como o firmware (desde 14/10/2026, SC-01/SC-17): sx/sy e wx/wy no CORPO,
+        # sx>0 = deslocado para +X do corpo; w ≈ v_corpo/L.
+        c, s = math.cos(state.heading), math.sin(state.heading)
+        sx, sy = c * sx + s * sy, -s * sx + c * sy
+        vbx = c * state.velocity[0] + s * state.velocity[1]
+        vby = -s * state.velocity[0] + c * state.velocity[1]
+        wx = vbx / L
+        wy = vby / L
         vision_fresh = self._vision is not None
         pwm = self.cluster.params.pwm_neutral_us + self.cluster._u_lag
         flags = (

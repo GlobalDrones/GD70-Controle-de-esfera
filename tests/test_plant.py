@@ -572,16 +572,16 @@ def test_interactive_window_smoke_headless():
 
     # segurar força externa + sequência de teclas de UI
     win.on_press(FakeEvent("right"))
-    win.on_press(FakeEvent("1"))   # desliga XY
-    win.on_press(FakeEvent("x"))   # heading setpoint +15°
+    win.on_press(FakeEvent("p"))   # desliga XY
+    win.on_press(FakeEvent("]"))   # heading setpoint +15°
     win.on_press(FakeEvent("g"))
     win.on_press(FakeEvent("+"))
     for _ in range(5):
         win.on_timer()  # avança simulação + redraw (sem GUI)
-    win.on_press(FakeEvent("1"))   # religa XY
-    win.on_press(FakeEvent("p"))   # pausa
+    win.on_press(FakeEvent("p"))   # religa XY
+    win.on_press(FakeEvent(" "))   # pausa
     win.on_timer()
-    win.on_press(FakeEvent("p"))   # retoma
+    win.on_press(FakeEvent(" "))   # retoma
     win.on_release(FakeEvent("right"))
 
     assert controller.xy_enabled is True

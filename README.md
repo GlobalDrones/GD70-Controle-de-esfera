@@ -80,9 +80,10 @@ python main.py --length 2.5 --inertia 1.4   # parâmetros da sessão
 python -m pytest tests/ -q              # testes
 ```
 
-Teclas do interativo: setas = força externa · Q/E = torque · 1/2 =
-liga/desliga XY/heading · Z/X = ψ desejado · G, +/− = ganhos ao vivo ·
-R/P/Esc = reset/pausa/sair.
+Teclas do interativo: setas = força externa · `,`/`.` = torque · `p`/`y` =
+liga/desliga anti-balanço/heading · `[`/`]` = ψ desejado ∓15° · G, +/− = ganhos
+ao vivo · R/espaço/Esc = reset/pausa/sair. **Tabela única de comandos e teclas
+(firmware, Rasp, rádio, supervisório, twin): [docs/COMANDOS.md](docs/COMANDOS.md).**
 
 ## Digital Twin
 
@@ -96,9 +97,10 @@ A janela do twin adiciona à simulação: **esfera fantasma** (estado real:
 inclinação, heading, empuxos dos PWMs medidos), **linha de transmissão a
 distância D** abaixo da esfera (quando a visão enviar), **curvas real vs
 simulada** (inclinação, velocidade, heading, PWM) e HUD do lado real com
-conexão e estado dos loops. Os comandos vão aos dois lados: 1/2 (loops),
-Z/X (heading), K (parada geral), **C (calibração da MPU — esfera parada!)**
-e +/− (ganhos, com push ao STM via G).
+conexão e estado dos loops. Os comandos vão aos dois lados: `p`/`y` (loops),
+`[`/`]` (heading), `k` (parada geral), **`z` (calibração da MPU — esfera parada!)**
+e +/− (ganhos do controlador Python; os índices 3–7 não valem para o firmware —
+ajuste os ganhos do hardware pelo supervisório, ver docs/COMANDOS.md §3).
 
 ### Arquitetura
 
@@ -171,6 +173,22 @@ Saída: `calib.json` saneado e push opcional à RAM do STM.
 
 ## Firmware Consolidado (firmware/main.cpp)
 
+> **Revisão de 14/10/2026 (sensoriamento e controle)** — detalhes e justificativas em
+> [AUDITORIA_CONTROLE.md](AUDITORIA_CONTROLE.md); comandos em [docs/COMANDOS.md](docs/COMANDOS.md).
+> - O anti-balanço tinha **um eixo com realimentação positiva** (gyro espelhado, SC-01):
+>   corrigido para a rotação correta; a montagem da MPU fica em `IMU_MOUNT_DEG`/`IMU_Z_UP` e
+>   **precisa do teste de eixos da Etapa 3 do BRINGUP antes de ligar o `p`**.
+> - Heading controlado em **torque** (N·m) e alocação conjunta força+torque (sem empurrão
+>   lateral nas manobras de yaw); ganhos G3–G7 mudaram de unidade.
+> - Calibração do gyro de ~9 s com gate real (`z` recusa movimento, `Z` força); malhas não
+>   ligam sem calibração; falha da MPU desliga tudo; visão por evento com latência.
+> - Estimador opcional da velocidade do CG (`G8 1`) — testar na bancada.
+> - `firmware/host_sim/`: o firmware real roda no PC em malha fechada contra um pêndulo
+>   simulado (`tests/test_firmware_host.py`, precisa de g++/clang).
+>
+> O texto abaixo descreve a versão anterior onde não foi atualizado; em conflito, valem os
+> dois documentos acima.
+
 Unifica a robustez comprovada do `mainYAWBOM` com o protocolo do Digital Twin:
 1. **Filtragem de Ruído Reforçada:**
    - DLPF de hardware no MPU6050 (20 Hz, reg `0x1A = 0x04`): elimina ruídos estruturais das hélices diretamente no conversor AD do sensor;
@@ -186,13 +204,12 @@ Unifica a robustez comprovada do `mainYAWBOM` com o protocolo do Digital Twin:
    - Watchdog de 250 ms na polia (Deadman Switch): desliga se o link cair;
    - Cancelamento imediato do pulso do wizard no comando de emergência `k`.
 
-Comandos (USB e Serial2): `w/s/x` pinça · `a/d/c` polia · `e` AS5600 ·
-`m` teste de motores · `y` yaw on/off · `p|b` anti-balanço on/off · `k`
-**parada geral** · `z` calibra MPU (com gate de quietude) · `t` calibra L
-pelo período · `0` zera yaw desejado · `L<val>` comprimento · `<num>` degrau
-de yaw · `G<idx> <val>` ganho · `R` lê ganhos · `V<b> <D>` visão ·
-`W<m> <us> <ms>` pulso do wizard · `M<m> ...` calibração por motor.
-Telemetria 25 Hz: `TEL,t_ms,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,b,c,L,D,flags`.
+Comandos (USB e Serial2) — tabela completa em [docs/COMANDOS.md](docs/COMANDOS.md):
+`w/s/x` pinça · `a/d/c` polia · `e` AS5600 · `m` teste de motores · `y` heading on/off ·
+`p` anti-balanço on/off · `k` **parada geral** · `z` calibra MPU (`Z` força) · `t` L pelo
+período · `0` zera yaw desejado · `L<val>` · `<num>` degrau de yaw · `G<idx> <val>` ·
+`R` · `V<b> <D> [idade_ms]` · `W<m> <us> <ms>` · `M<m> ...`.
+Telemetria 25 Hz (v3): `TEL,t_ms,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,b,c,L,D,flags,F_cmd_x,F_cmd_y,Tz,vhat_x,vhat_y`.
 
 Loops de controle **desligados no boot** — 'y'/'p' ligam.
 
@@ -205,9 +222,10 @@ Loops de controle **desligados no boot** — 'y'/'p' ligam.
 - [x] **Etapa 4 — Raspberry Pi**: ponte TCP (porta 9999), VNC ajustado (10 FPS).
 - [x] **Etapa 5 — Identificação de Motores (`m`)**: confirmada rotação, Motor A (+X), Motor B (+120°), Motor C (-120°, invertido de fábrica).
 - [x] **Etapa 6 — Wizard de Atuadores**: parada manual entre motores executada, calibração salva em `calib.json`.
+- [ ] **Refazer Etapa 3 (teste de eixos) com o firmware de 14/10/2026** — obrigatório antes da Etapa 7.
 - [ ] **Etapa 7 — Primeira Malha Fechada (Próximo Passo)**:
-  1. Ligar anti-balanço (`p` ou `1` no twin) e empurrar a esfera: confirmar amortecimento rápido;
-  2. Ligar heading (`y` ou `2` no twin): aplicar degraus de 15° (`15\n` ou tecla `X`) e observar acomodação suave.
+  1. Ligar anti-balanço (`p`) e empurrar a esfera: confirmar amortecimento rápido em **todas** as direções;
+  2. Ligar heading (`y`): aplicar degraus de 15° (`15\n` ou tecla `]`) e observar acomodação suave.
 
 ## Comportamento esperado (simulador, defaults provisórios, faixa completa do ESC)
 

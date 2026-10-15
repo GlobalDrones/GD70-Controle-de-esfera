@@ -9,20 +9,30 @@ Procedimento (por motor, com loops de controle DESLIGADOS e esfera pendurada):
     para cada nível u ∈ {+240, +170, +100, −100, −170, −240} µs:
         0,5 s de linha de base → pulso de 600 ms (comando W) → 1,2 s de repouso
 
-Medição (telemetria TEL a 25 Hz): resposta das taxas de inclinação NO MUNDO
-(wx, wy) e da taxa de yaw durante o pulso, menos a linha de base.
+Medição (telemetria TEL a 25 Hz): resposta das taxas de inclinação NO CORPO
+(wx, wy — desde o firmware de 14/10/2026 já vêm no corpo, com wx>0 = movendo
+para +X) e da taxa de yaw durante o pulso, menos a linha de base.
+
+LIMITAÇÕES CONHECIDAS (AUDITORIA_CONTROLE.md, WZ-02..04):
+
+- A fórmula de força supõe pêndulo SIMPLES. A esfera presa por pino é um
+  pêndulo duplo: nos 600 ms do pulso o giroscópio vê também a rotação da
+  esfera, e o kf pode sair de 0,1× a 10× o real. Por isso o ``--push`` envia
+  só o ``yaw_sign``; kf/dz só vão ao STM com ``--push-kf``. Para kf, prefira
+  medir com dinamômetro (docs/BRINGUP.md, Etapa 6).
+- A direção de empuxo é geometria: o firmware ignora tx/ty do comando M. O
+  valor medido aqui serve só de conferência (deve bater com a/b/c a 120°).
 
 Ajuste:
 
-- direção de empuxo: componente mundial da resposta ao pulso +240, girada
-  para o corpo por Rz(−yaw) do instante do pulso;
+- direção de empuxo: resposta ao pulso +240 já no corpo (conferência);
 - yaw_sign: sinal da resposta da taxa de yaw ao pulso +240;
 - curva: F = m·L·2·mean(θ̇)/T do pulso em cada nível; sqrt(F) = sqrt(kf)·(u−dz)
   (regressão linear por sentido → kf e dz por motor);
 - kf_rev/kf_fwd pela razão das respostas ±u.
 
 Saída: calib.json (mesmo formato do cluster Python) + relatório; ``--push``
-envia os parâmetros ao STM (comando M, RAM).
+envia o yaw_sign ao STM (comando M, RAM); ``--push-kf`` envia também kf/dz.
 
 Uso:
 
@@ -114,9 +124,21 @@ def _fit_leftover_sinusoid(frames, omega):
     """
     t = np.array([(f.t_ms - frames[0].t_ms) / 1000.0 for f in frames])
     basis = np.stack([np.sin(omega * t), np.cos(omega * t), np.ones_like(t)]).T
-    w = np.array([[f.wx_dps, f.wy_dps] for f in frames])  # (n, 2)
+    w = np.array([_body_to_world(f) for f in frames])  # (n, 2)
     coef, *_ = np.linalg.lstsq(basis, w, rcond=None)  # (3, 2)
     return coef, frames[0].t_ms
+
+
+def _body_to_world(f) -> np.ndarray:
+    """wx/wy (corpo) -> eixos fixos no mundo pelo yaw do próprio quadro.
+
+    O balanço residual é fixo no MUNDO; se a esfera gira durante a medição, no
+    corpo ele não é uma senoide de eixo fixo. O zero do yaw é arbitrário (o
+    firmware re-zera a cada setpoint), mas ele se cancela: a resposta volta ao
+    corpo com o mesmo yaw em run_pulse().
+    """
+    c, s = math.cos(math.radians(f.yaw_deg)), math.sin(math.radians(f.yaw_deg))
+    return np.array([c * f.wx_dps - s * f.wy_dps, s * f.wx_dps + c * f.wy_dps])
 
 
 def _leftover_at(coef, t_ms0, t_ms, omega):
@@ -273,9 +295,11 @@ def run_pulse(transport: Transport, motor: int, us: int) -> dict:
     body_resp = []
     ratez = []
     for f in during:
-        w_world = np.array([f.wx_dps, f.wy_dps]) - _leftover_at(coef, t0_ms, f.t_ms, omega)
-        yaw = math.radians(f.yaw_deg)
-        c, s = math.cos(yaw), math.sin(yaw)
+        # wx/wy já vêm no CORPO (firmware e SimSTM). O residual é tirado no mundo e o
+        # resultado volta ao corpo com o MESMO yaw: o zero arbitrário do yaw se cancela.
+        # (A versão anterior tratava wx/wy como mundo e girava por um yaw qualquer — WZ-02.)
+        w_world = _body_to_world(f) - _leftover_at(coef, t0_ms, f.t_ms, omega)
+        c, s = math.cos(math.radians(f.yaw_deg)), math.sin(math.radians(f.yaw_deg))
         body_resp.append([c * w_world[0] + s * w_world[1], -s * w_world[0] + c * w_world[1]])
         ratez.append(f.rate_z_dps - base_rz)
 
@@ -382,7 +406,10 @@ def main(argv=None) -> None:
                         help="agente na Rasp")
     parser.add_argument("--out", default="calib.json", help="arquivo de saída")
     parser.add_argument("--push", action="store_true",
-                        help="envia a calibração ao STM (comando M, RAM)")
+                        help="envia o yaw_sign ao STM (comando M, RAM)")
+    parser.add_argument("--push-kf", action="store_true",
+                        help="com --push, envia também kf_fwd/kf_rev/dz (pouco confiável "
+                             "no pêndulo duplo; prefira dinamômetro)")
     args = parser.parse_args(argv)
 
     if args.sim:
@@ -433,12 +460,19 @@ def main(argv=None) -> None:
     print(f"\nCalibração salva em {args.out}")
 
     if args.push:
+        resp = input("Enviar ao STM? [s/N] ").strip().lower() if not args.sim else "s"
+        if resp != "s":
+            print("Push cancelado.")
+            return
         for motor, calib in enumerate(calibs):
+            if args.push_kf:
+                kf, kr, dz = calib.kf_fwd, calib.kf_rev, calib.deadzone_us
+            else:
+                kf, kr, dz = 0.0, 0.0, -1.0   # firmware: <= 0 / < 0 = manter o atual
             transport.write_line(protocol.cmd_motor_calib(
-                motor, calib.thrust_dir[0], calib.thrust_dir[1], calib.yaw_sign,
-                calib.kf_fwd, calib.kf_rev, calib.deadzone_us,
+                motor, calib.thrust_dir[0], calib.thrust_dir[1], calib.yaw_sign, kf, kr, dz,
             ))
-        print("Calibração enviada ao STM (RAM).")
+        print("Calibração enviada ao STM (RAM)" + (" com kf/dz." if args.push_kf else " — só yaw_sign."))
 
 
 if __name__ == "__main__":

@@ -21,14 +21,15 @@ Layout da janela:
 
 Teclas:
 
+    (mesmas teclas do supervisório e do twin — tabela única em docs/COMANDOS.md)
     setas        força externa contínua (±magnitude) em X/Y do MUNDO, enquanto seguras
-    Q / E        torque externo contínuo ±0,05 N·m no heading
-    1 / 2        liga/desliga o controle pendular (X/Y) / o controle de heading
-    Z / X        setpoint de heading −15° / +15°
+    , / .        torque externo contínuo ±0,05 N·m no heading
+    p / y        liga/desliga o anti-balanço (X/Y) / o heading (as letras do STM)
+    [ / ]        setpoint de heading −15° / +15°
     G            seleciona o próximo item ajustável (força ext., depois os ganhos)
     + / -        ajusta o item selecionado
     R            reset: esfera volta à condição inicial, integrais zeradas
-    P            pausa / retoma
+    espaço       pausa / retoma
     Esc          sai
 
 A lógica ao vivo fica em :class:`LiveSession` (sem dependência de UI —
@@ -50,7 +51,7 @@ from controller import EsferaController
 from scenarios import Scenario
 from simulation import PendulumPlant
 
-HELD_KEYS = {"left", "right", "up", "down", "q", "e"}
+HELD_KEYS = {"left", "right", "up", "down", ",", "."}
 TRAIL_SECONDS = 3.0
 
 
@@ -76,7 +77,7 @@ class LiveSession:
         self.paused = False
         self.t = 0.0
         self.external_force_magnitude = 15.0  # N, aplicada pelas setas
-        self.external_torque_magnitude = 0.05  # N m, aplicada por Q/E
+        self.external_torque_magnitude = 0.05  # N m, aplicada por , / .
 
         # Último ato de controle (para HUD/painel mesmo sem passo novo).
         self.last_pwm = np.full(cluster.N_THRUSTERS, cluster.params.pwm_neutral_us)
@@ -143,7 +144,7 @@ class LiveSession:
 
     def external_torque(self) -> float:
         return self.external_torque_magnitude * (
-            ("e" in self.held_keys) - ("q" in self.held_keys)
+            ("." in self.held_keys) - ("," in self.held_keys)
         )
 
     # ------------------------------------------------------------------- passo
@@ -222,8 +223,9 @@ class LiveSession:
 def _unbind_matplotlib_defaults(plt) -> None:
     """Remove atalhos default do matplotlib que conflitam com os nossos."""
     ours = {
-        "left", "right", "up", "down", "q", "e", "1", "2", "z", "x",
-        "g", "+", "-", "=", "r", "p", " ", "escape",
+        "left", "right", "up", "down", ",", ".", "p", "y", "[", "]",
+        "g", "+", "-", "=", "r", " ", "escape", "k", "z", "0",
+        "w", "s", "x", "a", "d", "c", "e", "t", "q",
     }
     for key in list(plt.rcParams):
         if key.startswith("keymap."):
@@ -233,11 +235,11 @@ def _unbind_matplotlib_defaults(plt) -> None:
 # Blocos de texto do rodapé: help de teclas (esquerda) e ganhos (direita).
 HELP_TEXT = (
     "setas ... força externa X/Y (mundo)\n"
-    "Q/E ..... torque externo no heading\n"
-    "Z/X ..... ψ desejado −15° / +15°\n"
-    "1/2 ..... liga/desliga XY / heading\n"
+    ", / . ... torque externo no heading\n"
+    "[ / ] ... ψ desejado −15° / +15°\n"
+    "p / y ... liga/desliga XY / heading\n"
     "G ....... seleciona item   +/− ajusta\n"
-    "R ....... reset   P pausa   Esc sai"
+    "R reset   espaço pausa   Esc sai"
 )
 
 
@@ -405,13 +407,13 @@ class InteractiveWindow:
         key = "+" if event.key == "=" else event.key
         if key in HELD_KEYS:
             session.held_keys.add(key)
-        if key == "1":
+        if key == "p":
             session.toggle_xy()
-        elif key == "2":
+        elif key == "y":
             session.toggle_heading()
-        elif key == "z":
+        elif key == "[":
             session.nudge_heading_setpoint(-15.0)
-        elif key == "x":
+        elif key == "]":
             session.nudge_heading_setpoint(+15.0)
         elif key == "g":
             session.cycle_selected()
@@ -421,7 +423,7 @@ class InteractiveWindow:
             session.adjust_selected(-1.0)
         elif key == "r":
             session.reset()
-        elif key == "p":
+        elif key == " ":
             session.paused = not session.paused
         elif key == "escape":
             import matplotlib.pyplot as plt
@@ -582,9 +584,9 @@ def run(
         )
 
     print("Modo interativo — teclas (também na janela, bloco CONTROLES):")
-    print("  setas: força externa X/Y · Q/E: torque no heading · Z/X: ψ desejado")
-    print("  1/2: liga/desliga XY/heading · G: seleciona item · +/−: ajusta valor")
-    print("  R: reset · P: pausa · Esc: sai")
+    print("  setas: força externa X/Y · , .: torque no heading · [ ]: ψ desejado ±15°")
+    print("  p/y: liga/desliga anti-balanço/heading · G: seleciona item · +/−: ajusta valor")
+    print("  R: reset · espaço: pausa · Esc: sai   (tabela única: docs/COMANDOS.md)")
 
     session = LiveSession(plant, cluster, controller, scenario)
     InteractiveWindow(session).show()

@@ -37,7 +37,15 @@ COMMANDS = {
     "CH15": "d",
 }
 if HABILITAR_CH16_ANTI_BALANCO:
-    COMMANDS["CH16"] = "b"
+    COMMANDS["CH16"] = "p"   # mesma letra do STM/teclado (antes "b", alias removido)
+
+# Polia (a/d): o firmware tem watchdog de 250 ms — sem repetição ela para sozinha
+# logo depois de apertar. Enquanto o botão estiver pressionado, reenvia a cada 100 ms.
+POLIA_CHANNELS = ("CH14", "CH15")
+POLIA_KEEPALIVE_S = 0.10
+# Pinça (w/s): ao soltar o botão manda "x" (antes corria até o fim de curso — RP-08).
+PINCA_CHANNELS = ("CH12", "CH13")
+_last_send = {}
 
 # PWM: < 1300 us = solto | 1300-1700 us = zona morta | > 1700 us = pressionado
 BUTTON_LOW = 1100
@@ -119,6 +127,8 @@ def _process_button(channel):
 
         if button_pressed[channel]:
             print(f"[PWM] {channel} = {pwm:.0f} us -> SOLTO / REARMADO")
+            if channel in PINCA_CHANNELS:
+                send_cmd_serial("x")
         button_pressed[channel] = False
         return
 
@@ -134,7 +144,13 @@ def _process_button(channel):
         if press_streak[channel] >= CONFIRM_READS and not button_pressed[channel]:
             print(f"[PWM] {channel} = {pwm:.0f} us -> {COMMANDS[channel].upper()} (confirmado)")
             send_cmd_serial(COMMANDS[channel])
+            _last_send[channel] = time.monotonic()
             button_pressed[channel] = True
+        elif button_pressed[channel] and channel in POLIA_CHANNELS:
+            now = time.monotonic()
+            if now - _last_send.get(channel, 0.0) >= POLIA_KEEPALIVE_S:
+                send_cmd_serial(COMMANDS[channel], verbose=False)   # keepalive do watchdog da polia
+                _last_send[channel] = now
 
         return
 

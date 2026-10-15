@@ -1,5 +1,12 @@
 # Bring-up do Sistema Esfera — guia passo a passo
 
+> **Atualização 14/10/2026:** o firmware mudou no sensoriamento e no controle
+> ([AUDITORIA_CONTROLE.md](../AUDITORIA_CONTROLE.md)) e as teclas foram unificadas
+> ([COMANDOS.md](COMANDOS.md): a tecla é a própria letra do comando do STM em todo
+> programa). **Refaça a Etapa 3 (teste de eixos) antes de ligar qualquer malha** — o
+> anti-balanço antigo tinha um eixo com sinal invertido, e o novo depende de a montagem
+> da MPU estar declarada certa em `IMU_MOUNT_DEG`.
+
 Este documento descreve como ligar e validar o sistema Esfera pela primeira
 vez, em etapas separadas. A regra principal é simples: **os motores só são
 ligados na Etapa 5**. Antes disso, tudo o que é testado — comunicação,
@@ -108,8 +115,8 @@ python -m twin --sim            # abre o twin conectado a um STM simulado
 Com o twin aberto, experimente sem pressa:
 
 - As **setas** do teclado empurram a esfera simulada (força externa);
-- **1** e **2** ligam e desligam os loops de amortecimento e de heading;
-- **Z** e **X** pedem que a esfera gire −15° ou +15°;
+- **p** e **y** ligam e desligam os loops de amortecimento e de heading;
+- **[** e **]** pedem que a esfera gire −15° ou +15°;
 - **G** seguido de **+** ou **−** seleciona e ajusta um ganho;
 - **K** é a parada geral.
 
@@ -184,23 +191,27 @@ números de PWM na telemetria.
 
 1. A telemetria chega (a faixa no topo mostra o tempo correndo, e o painel
    de PWM mostra três linhas paradas em 1500 µs);
-2. Pressione **2** (liga o loop de heading) e depois **1** (liga o
-   amortecimento): o quadro de status deve mostrar `HEADING: LIGADO` e
-   `XY: LIGADO`;
-3. Pressione **X** (girar +15°): os três PWMs se movem **juntos** para o
-   mesmo lado e voltam a 1500 quando a manobra termina. É a distribuição de
-   yaw agindo — tudo visível sem motores;
+2. Calibre a MPU primeiro (item 6): desde 14/10/2026 o STM **recusa** ligar
+   as malhas sem uma calibração válida. Depois pressione **y** (liga o loop
+   de heading) e **p** (liga o amortecimento): o quadro de status deve
+   mostrar `HEADING: LIGADO` e `XY: LIGADO`;
+3. Pressione **]** (girar +15°): os PWMs de a e b vão para um lado e o de c
+   para o outro (c é invertido) e voltam a 1500 quando a manobra termina. A
+   telemetria nova mostra também o torque comandado (`Tz`, em N·m);
 4. Pressione **G** e depois **+**: o valor do ganho selecionado aumenta
    (confira na linha `GANHOS` do rodapé). Com **R** o STM devolve os 8
    ganhos;
 5. Pressione **K**: parada geral — os dois loops desligam e os PWMs voltam
    a 1500;
-6. Calibre a MPU (comando `z`) — com a esfera pendurada, parada e ninguém
-   encostando. Onde enviar: tecla **C** na janela do twin, ou `z` + Enter em
-   um `nc localhost 9999` aberto na Rasp (a resposta do STM volta no
-   terminal). Para testar a proteção contra movimento, repita a calibração
-   **enquanto alguém mexe na esfera**: ela deve se recusar e avisar. Esse é
-   o "gate de quietude" funcionando.
+6. Calibre a MPU (comando `z`, **~9 s**) — com a esfera pendurada, parada,
+   **sem balanço residual** e ninguém encostando. Onde enviar: tecla **z** no
+   supervisório, na janela da Rasp ou no twin, ou `z` + Enter em um
+   `nc localhost 9999` aberto na Rasp. A janela longa (≈2 períodos do
+   pêndulo) é de propósito: com a antiga (~1,4 s) um balanço de 1° deixava
+   ~1 °/s de erro no gyro, que virava ~1,6 N de empurrão constante. Para
+   testar a proteção, repita **enquanto alguém mexe na esfera**: o STM deve
+   responder `calibracao RECUSADA` e manter as malhas bloqueadas. `Z`
+   (maiúsculo) força a calibração mesmo assim — só em último caso.
 
 **Como saber que deu certo:** todos os seis itens acima se comportam como
 descrito, sem nenhum movimento físico.
@@ -224,21 +235,41 @@ lado errado — muito melhor descobrir agora, sem motores.
 
 **Passo a passo** (tudo observando os painéis do twin, ainda sem bateria):
 
-1. **Eixos de inclinação.** Com a mão, incline a esfera devagar para a
-   direita: o gráfico de θx ou θy deve responder no eixo correspondente, no
-   sentido correspondente. Incline para os quatro lados e confira se as
-   curvas fazem sentido (escreva o que observou — vai servir de referência);
-2. **Compensação de yaw.** Incline a esfera uns 15° em qualquer direção e,
-   mantendo a inclinação, gire-a lentamente em torno do eixo vertical (o
-   heading no painel deve mudar). **As curvas de θx/θy não podem girar
-   junto** — a inclinação é a mesma, só a esfera girou de direção. Se as
-   curvas acompanharem a rotação, a constante `COMP_YAW_SIGN` do firmware
-   está com o sinal trocado: inverta-a e regrave (é uma linha, no topo de
-   `firmware/main.cpp`);
+1. **Teste de eixos (OBRIGATÓRIO — define o sinal do anti-balanço).**
+   Convenção: **+X do corpo** = direção em que o **motor a empurra a
+   esfera**; **+Y** = 90° anti-horário a partir de +X, visto de cima. Com a
+   esfera pendurada e parada, empurre-a **devagar, com a mão**:
+   - na direção **+X** → `wx` fica **positivo** durante o empurrão e `wy` ≈ 0;
+     depois, parada deslocada, `sx` positivo;
+   - na direção **+Y** → `wy` positivo e `wx` ≈ 0; `sy` positivo.
+
+   Se não bater, ajuste a montagem no topo de `firmware/main.cpp` e regrave
+   (partindo de `IMU_MOUNT_DEG = 0`, `IMU_Z_UP = true`):
+   - empurrão +X aparece como `wy` **negativo** (e +Y como `wx` positivo) →
+     `IMU_MOUNT_DEG = 90`;
+   - +X aparece como `wy` **positivo** (e +Y como `wx` negativo) →
+     `IMU_MOUNT_DEG = -90`;
+   - +X aparece como `wx` negativo **e** +Y como `wy` negativo →
+     `IMU_MOUNT_DEG = 180`;
+   - **só um** dos dois sai invertido (ex.: +X → `wx` negativo, mas +Y →
+     `wy` positivo): é um espelhamento, que nenhuma rotação explica — a MPU
+     está de cabeça para baixo → `IMU_Z_UP = false`, regrave e repita o
+     teste (pode ainda precisar de um ângulo).
+
+   Use o empurrão lento à mão, **não** um pulso de motor: com a esfera presa
+   por pino, o gyro pode responder ao contrário nos primeiros instantes de
+   um pulso. **Não ligue o `p` antes deste teste passar.**
+2. **Inclinação e rotação.** Incline a esfera uns 15° e, mantendo a
+   inclinação, gire-a devagar em torno do eixo vertical. Desde 14/10/2026
+   `sx/sy` são do **corpo**: as curvas **devem** girar junto (a inclinação
+   "anda" de θx para θy conforme o corpo gira), suavemente e sem saltos.
+   (A instrução antiga — "não podem girar" — pedia o comportamento de
+   mundo, que não é o que a fusão calcula; `COMP_YAW_SIGN` não existe mais.)
 3. **Deriva do heading.** Deixe a esfera completamente parada por um minuto
-   e observe a curva de heading: ela pode subir ou descer devagar (alguns
-   graus por minuto). Isso é a deriva natural do giroscópio — esperado, e
-   corrigido depois pela visão;
+   e observe a curva de heading. Com a calibração nova (9 s) a deriva deve
+   ficar bem abaixo de 1°/min. Rotação lenta **real** agora aparece (a zona
+   morta de integração caiu de 0,35 para 0,05 °/s); se o heading andar com
+   a esfera parada, recalibre (`z`);
 4. **Comprimento do cabo.** Afaste a esfera e solte-a para balançar
    livremente, com o amortecimento desligado. Depois de alguns balanços,
    envie o comando `t`: o STM mede o período de oscilação e calcula o
@@ -305,13 +336,18 @@ Então:
    compare com o valor de D mostrado;
 3. Incline ou mova a corda: o bearing deve mudar no sentido esperado;
 4. A tecla **v** (na janela da visão) liga e desliga o envio da visão ao
-   STM. Como o loop de heading continua desligado, nada acontece além do
+   STM. As teclas de comando da janela da Rasp são as **mesmas letras** do
+   STM (`k` parada, `p`/`y` malhas, `w/s/x` pinça, `a/d/c` polia, `z`, `t`,
+   `0`, `e`); as da visão/SGBM mudaram para não colidir: `f` = WLS (era
+   `w`), `>`/`<` = min_disp (eram `A`/`S`), `!` = reset físico do STM (era
+   `R`). Tabela em [COMANDOS.md](COMANDOS.md). Como o loop de heading continua desligado, nada acontece além do
    STM passar a receber os valores — seguro;
 5. Se houver rádio ligado à Rasp, teste os canais: eles comandam a pinça e
    a polia. **Atenção: este é o primeiro movimento físico do bring-up** —
    se preferir, deixe para depois da Etapa 5;
-6. Na Rasp, a tecla **p** agora é a parada geral de verdade (foi corrigida
-   na migração; antigamente ela desligava o amortecimento sem querer).
+6. Na Rasp, a parada geral é a tecla **k** (como em todo lugar). A tecla
+   **p** liga/desliga o anti-balanço, igual ao comando do STM. (Até
+   14/10/2026, `p` na Rasp era a parada e `k` descia a pinça.)
 
 **Como saber que deu certo:** visão detectando a corda com bearing e
 distância plausíveis; twin enxergando o STM pela rede; comandos fluindo nos
@@ -380,6 +416,14 @@ No seu computador (ou na própria Rasp, com `--tcp localhost:9999`):
 python wizard.py --serial COM7 --push
 ```
 
+> **Desde 14/10/2026:** o `--push` envia só o `yaw_sign` (kf/dz só com
+> `--push-kf`, e o firmware valida a faixa). A fórmula de força do wizard
+> supõe pêndulo simples; com a esfera presa por pino o kf medido pode sair
+> várias vezes errado. **Para kf, meça estaticamente:** prenda a esfera a um
+> dinamômetro de mão/balança de bagagem na horizontal e anote a força de cada
+> motor em 4–5 níveis de PWM por sentido (`W<m> <us> 3000`). Direção de
+> empuxo é geometria: o firmware ignora `tx/ty`.
+
 O procedimento é automático e leva cerca de 42 segundos no total (6 pulsos
 por motor, 18 pulsos para os três). Ele:
 
@@ -424,20 +468,30 @@ Mantenha a esfera pendurada livre e a tecla `k` à mão.
 
 **Passo a passo:**
 
-1. **Amortecimento primeiro.** Ligue com `p` (ou tecla **1** no twin) e
-   dê um empurrão suave na esfera. A oscilação deve **diminuir** com o
-   tempo, claramente mais rápido do que sem controle;
+1. **Amortecimento primeiro.** Ligue com `p` e dê um empurrão suave na
+   esfera, em **várias direções** (+X, +Y, diagonal). A oscilação deve
+   **diminuir** com o tempo em todas, claramente mais rápido do que sem
+   controle. A telemetria mostra `F_cmd` e `v̂`: `F_cmd` tem que apontar
+   **contra** `v̂`. Perto do prumo (< ~0,35°) os motores desligam de
+   propósito (zona de repouso).
+
+   Velocidade pelo estimador do CG (opcional, `G8 1` ou botão no
+   supervisório): repita o teste. Se amortecer melhor (sobretudo se com
+   `G8 0` o `wx/wy` cai rápido mas a esfera continua indo e vindo), mantenha;
+   ajuste `G9` = distância pino→CG medida;
 
    **Se a oscilação crescer em vez de diminuir, pressione `k` imediatamente.**
    Isso indica um eixo com sinal invertido — volte à Etapa 3 e repita os
    testes de eixos. Não insista com o controle ligado.
 
 2. **Heading depois.** Com o amortecimento estabilizado, ligue o heading
-   com `y` (ou tecla **2**) e peça um degrau pequeno: `15` na serial (ou
-   tecla **X** no twin). A esfera deve girar suavemente até o alvo e parar
+   com `y` e peça um degrau pequeno: `15` na serial (ou tecla **]** no
+   supervisório/twin). Os ganhos agora são em torque (N·m/rad, N·m·s/rad);
+   se oscilar, aumente `yaw_kd` (G5); se for lento, aumente `yaw_kp` (G3). A esfera deve girar suavemente até o alvo e parar
    sem passar do ponto;
 3. **Ajuste fino (opcional).** Se quiser refinar os ganhos, use as teclas
-   **G**, **+** e **−** do twin: o novo valor vale na hora para o hardware.
+   **G**, **+** e **−** do **supervisório** (no twin os índices 3–7 são do
+   controlador Python e o firmware os recusa): o novo valor vale na hora.
    Ajuste de pouco em pouco, um ganho por vez, e observe a resposta.
 
 **Como saber que deu certo:** o empurrão amortece; o degrau de heading chega
@@ -485,7 +539,7 @@ distância D abaixo da esfera.
 | Quando | Pendência |
 |---|---|
 | Etapa 1 | Saída de erros do compilador (se houver) |
-| Etapa 3 | Se `COMP_YAW_SIGN` precisar de inversão, regrar o firmware |
+| Etapa 3 | Teste de eixos: ajustar `IMU_MOUNT_DEG` / `IMU_Z_UP` se necessário e regravar |
 | Etapa 5 | Primeira impressão do atraso real do ESC + hélice |
 | Etapa 6 | Commit do `calib.json` medido; conferir se a força real difere muito dos 18 N provisórios (se diferir, os ganhos precisam de revisão) |
 | Etapa 7 | Medir corrente e temperatura dos ESCs na faixa completa |
