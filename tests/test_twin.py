@@ -222,9 +222,9 @@ def test_twin_window_smoke_headless():
     # liga loops no real (protocolo) e no sim (super), degrau de heading —
     # e deixa o twin "rodar" alguns segundos (tempo de parede simulado em
     # vários ticks: o on_timer limita cada tick a 0,15 s por segurança)
-    win.on_press(FakeEvent("2"))  # 'y' no firmware + toggle no sim
-    win.on_press(FakeEvent("1"))  # 'p' no firmware + toggle no sim
-    win.on_press(FakeEvent("x"))  # heading +15° nos dois lados
+    win.on_press(FakeEvent("y"))  # 'y' no firmware + toggle no sim
+    win.on_press(FakeEvent("p"))  # 'p' no firmware + toggle no sim
+    win.on_press(FakeEvent("]"))  # heading +15° nos dois lados
     for _ in range(30):
         win._twin_last -= 0.1
         win.on_timer()

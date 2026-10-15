@@ -399,9 +399,11 @@ bullets([
     "<b>ESCs F45A bidirecionais</b>: PWM de 1500 µs = parado; 1000/2000 µs = full speed em "
     "cada sentido; curva de empuxo quadrática com zona morta. Calibração de faixa já feita; "
     "verificar corrente/térmica com a faixa completa (±500 µs) liberada.",
-    "<b>MPU6050 no topo, junto ao pino</b>: nessa posição o acelerômetro lê praticamente só a "
-    "gravidade no referencial do corpo — um inclinômetro quase ideal, sem a corrupção da "
-    "dinâmica do pêndulo. Giroscópio ±250 °/s, acelerômetro ±2 g, barramento a 400 kHz.",
+    "<b>MPU6050 no topo, junto ao pino</b>: numa esfera pendurada o acelerômetro NÃO é "
+    "inclinômetro — mede a força do cabo + empuxo (ângulo do cabo relativo à esfera, ~0 no "
+    "balanço, mais F/(m·g)). A atitude vem do gyro integrado; o acelerômetro só ancora a "
+    "deriva lentamente (τ ≈ 10 s) e alimenta o estimador de velocidade do CG "
+    "(AUDITORIA_CONTROLE.md, SC-08/SC-02). Giroscópio ±250 °/s, acelerômetro ±2 g, 400 kHz.",
     "<b>AS5600</b>: encoder magnético do mecanismo da polia (comando 'e' lê o ângulo).",
     "<b>LM393 (olhal)</b>: sensor óptico que detecta se o olhal está engatado no mecanismo.",
     "<b>Fins de curso</b>: travam a pinça nos extremos (subida bloqueada no topo, descida na base).",

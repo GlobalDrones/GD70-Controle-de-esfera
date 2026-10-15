@@ -145,13 +145,14 @@ class TwinWindow(InteractiveWindow):
 
     def on_press(self, event) -> None:
         key = "+" if event.key == "=" else event.key
-        if key == "1":
-            self._send("p")  # toggle do anti-balanço no firmware
-        elif key == "2":
-            self._send("y")  # toggle do yaw no firmware
-        elif key == "z":
+        # Mesmas teclas do supervisório e da Rasp: a letra do STM é a tecla (docs/COMANDOS.md)
+        if key == "p":
+            self._send("p")  # anti-balanço (STM) + toggle no sim (super().on_press)
+        elif key == "y":
+            self._send("y")  # heading (STM) + toggle no sim
+        elif key == "[":
             self._send(protocol.cmd_yaw_step(-15.0))
-        elif key == "x":
+        elif key == "]":
             self._send(protocol.cmd_yaw_step(15.0))
         elif key == "k":
             self._send("k")
@@ -160,8 +161,8 @@ class TwinWindow(InteractiveWindow):
             self.session.controller.set_heading_enabled(False)
             self.session.cluster.reset()
             return
-        elif key == "c":
-            # calibração da MPU no hardware (esfera parada no prumo!)
+        elif key == "z":
+            # calibração da MPU no hardware (esfera parada no prumo! ~9 s)
             self._send("z")
             return
         super().on_press(event)

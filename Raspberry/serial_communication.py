@@ -117,12 +117,12 @@ def send_ang_serial(bearing, D=-1.0):
             print(f"[ERRO SERIAL] Falha ao enviar visão: {e}")
 
 
-def send_cmd_serial(cmd):
+def send_cmd_serial(cmd, verbose=True):
     if arduino is not None and arduino.is_open:
         msg = f"{cmd}\n"
         try:
             arduino.write(msg.encode("utf-8"))
-            if not cmd.startswith("V"):
+            if verbose and not cmd.startswith("V"):
                 print(f"[SERIAL] Comando enviado: {cmd}")
         except Exception as e:
             print(f"[ERRO SERIAL] Falha ao enviar comando '{cmd}': {e}")

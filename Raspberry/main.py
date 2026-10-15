@@ -4,6 +4,10 @@ from camera_and_image_manipulation import *
 from configs import *
 from pwm_input import iniciar_pwm_control
 
+# Teclas que vao direto ao STM (a tecla e o proprio comando — docs/COMANDOS.md).
+# 'm' (teste de motores, bloqueia ~18 s) fica de fora de proposito: so pelo supervisorio.
+TECLAS_STM = set("wsxadcekypzt0")
+
 # Controle de transmissao de angulo pela visao (toggle via tecla 'v')
 visao_atualiza_angulo = True
 
@@ -239,225 +243,64 @@ def main():
             cv2.imshow("Stereo Profundidade", display)
         
         k = cv2.waitKey(1) & 0xFF
-        if k in [ord("q"), 27]:
+        if k == 255:
+            continue
+        ch = chr(k) if k < 128 else ""
+
+        # -----------------------------------------------------------------
+        # Teclado (tabela unica em docs/COMANDOS.md):
+        #  - teclas do STM: a tecla E o comando (w envia "w", k envia "k"...),
+        #    igual ao supervisorio, ao twin e ao radio;
+        #  - teclas locais (visao/SGBM) usam simbolos/letras que NAO sao comando
+        #    do STM, para nunca haver duas acoes na mesma tecla.
+        # -----------------------------------------------------------------
+        if k in (ord("q"), 27):
             break
-            
-        # -----------------------------------------------------------------
-        # WLS
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("w"),
-            ord("W")
-        ]:
 
-            use_wls = not use_wls
+        elif ch in TECLAS_STM:
+            send_cmd_serial(ch)
 
-
-        # -----------------------------------------------------------------
-        # L298N
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("i"),
-            ord("I")
-        ]:
-
-            send_cmd_serial("w")
-
-
-        elif k in [
-            ord("k"),
-            ord("K")
-        ]:
-
-            send_cmd_serial("s")
-
-
-        elif k in [
-            ord("o"),
-            ord("O")
-        ]:
-
-            send_cmd_serial("x")
-
-
-        # -----------------------------------------------------------------
-        # BTS7960
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("j"),
-            ord("J")
-        ]:
-
-            send_cmd_serial("a")
-
-
-        elif k in [
-            ord("l"),
-            ord("L")
-        ]:
-
-            send_cmd_serial("d")
-
-
-        # -----------------------------------------------------------------
-        # PARADA GERAL (loops off + ESCs neutro + mecanismos) - Tecla 'p' / 'P'
-        # (corrigido: antes enviava 'p', que é o toggle do ANTI-BALANÇO —
-        #  o comando de parada geral do firmware é 'k')
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("p"),
-            ord("P")
-        ]:
-
-            send_cmd_serial("k")
-
-
-        # -----------------------------------------------------------------
-        # AS5600 - LEITURA ENCODER ('e' / 'E')
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("e"),
-            ord("E")
-        ]:
-
-            send_cmd_serial("e")
-
-
-        # -----------------------------------------------------------------
-        # CONTROLE ANTI-BALANÇO (Ligar / Desligar Pêndulo na STM32) - Tecla 'b' / 'B'
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("b"),
-            ord("B")
-        ]:
-
-            send_cmd_serial("b")
-
-
-        # -----------------------------------------------------------------
-        # CONTROLE DE YAW (Ligar / Desligar PID Yaw na STM32) - Tecla 'y' / 'Y'
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("y"),
-            ord("Y")
-        ]:
-
-            send_cmd_serial("y")
-
-
-        # -----------------------------------------------------------------
-        # ATUALIZAÇÃO DE ÂNGULO PELA VISÃO (Pausar / Retomar Envio) - Tecla 'v' / 'V'
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("v"),
-            ord("V")
-        ]:
-
+        elif ch == "v":
             visao_atualiza_angulo = not visao_atualiza_angulo
             status_txt = "ATIVADO" if visao_atualiza_angulo else "PAUSADO"
             print(f">> [VISAO]: Envio automatico de angulo pela visao: {status_txt}")
 
+        elif ch == "f":                       # filtro WLS (antes 'w', que e a pinca)
+            use_wls = not use_wls
+            print(f">> [SGBM]: WLS {'ligado' if use_wls else 'desligado'}")
 
-        # -----------------------------------------------------------------
-        # ZERAR YAW ('0')
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("0"),
-        ]:
-
-            send_cmd_serial("0")
-
-
-        # -----------------------------------------------------------------
-        # COMANDO 'm' - Tecla 'm' / 'M'
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("m"),
-            ord("M")
-        ]:
-
-            send_cmd_serial("m")
-
-        # -----------------------------------------------------------------
-        # ESCALA
-        # -----------------------------------------------------------------
         elif k in SCALES:
-
             scale_key = k
+            if scale_mgr is not None:         # modo mono nao tem escala (RP-06)
+                scale_mgr.set(SCALES[k])
 
-            scale_mgr.set(
-                SCALES[k]
-            )
-
-
-        # -----------------------------------------------------------------
-        # SGBM - DISPARIDADE
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("+"),
-            ord("=")
-        ]:
-
+        elif ch in ("+", "="):
             sgbm.inc_disp()
-
             left_m, right_m, wls = sgbm.build()
 
-
-        elif k == ord("-"):
-
+        elif ch == "-":
             sgbm.dec_disp()
-
             left_m, right_m, wls = sgbm.build()
 
-
-        # -----------------------------------------------------------------
-        # SGBM - MIN DISP
-        # -----------------------------------------------------------------
-        elif k == ord("A"):
-
+        elif ch == ">":                       # min_disp + (antes 'A', parecido com 'a' = polia)
             sgbm.inc_min_disp()
-
             left_m, right_m, wls = sgbm.build()
 
-
-        elif k == ord("S"):
-
+        elif ch == "<":                       # min_disp - (antes 'S', parecido com 's' = pinca)
             sgbm.dec_min_disp()
-
             left_m, right_m, wls = sgbm.build()
 
-
-        # -----------------------------------------------------------------
-        # SGBM - BLOCO (Movido para 'n' / 'N' para liberar 'b' para Anti-Balanço)
-        # -----------------------------------------------------------------
-        elif k in [
-            ord("n"),
-            ord("N")
-        ]:
-
+        elif ch == "n":
             sgbm.cycle_block()
-
             left_m, right_m, wls = sgbm.build()
 
-
-        # -----------------------------------------------------------------
-        # SGBM - RESET
-        # -----------------------------------------------------------------
-        elif k == ord("r"):
-
+        elif ch == "r":
             sgbm.reset()
-
             left_m, right_m, wls = sgbm.build()
 
+        elif ch == "!":                       # reset FISICO do STM (GPIO18) — antes 'R',
+            resetar_stm32()                   # que no STM e "ler ganhos"
 
-        # -----------------------------------------------------------------
-        # RESET FÍSICO - GPIO24
-        # -----------------------------------------------------------------
-        elif k == ord("R"):
-
-            resetar_stm32()
-
-            
     # Se usar o streamer, fecha os descritores de pipe ao sair
     # streamer.stdin.close()
     # streamer.wait()
