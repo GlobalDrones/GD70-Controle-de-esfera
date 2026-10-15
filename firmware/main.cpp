@@ -128,7 +128,11 @@ const float VISION_LATENCY_S = 0.10f;
 // MPU para CIMA. Determinar pelo teste de eixos do docs/BRINGUP.md (Etapa 3).
 // Com a MPU de Z para cima nao existe montagem que exija espelhar eixos: se o teste so
 // fechar com um espelhamento, a MPU esta de cabeca para baixo (IMU_Z_UP = false).
-const float IMU_MOUNT_DEG = 0.0f;
+// 15/10/2026: informado pela equipe — o motor a (BF) empurra a esfera para o -Y da MPU
+// (no sentido de maior eficiencia da helice, suposto PWM > 1500). +X do corpo = -Y da MPU
+// => o X da MPU esta a +90 graus do X do corpo. CONFIRMAR com o teste de eixos (BRINGUP,
+// Etapa 3): empurrando a esfera a mao para onde o BF empurra, wx tem que ficar POSITIVO.
+const float IMU_MOUNT_DEG = 90.0f;
 const bool  IMU_Z_UP      = true;
 
 // Zona morta de repouso no prumo (Anti-Balanco)

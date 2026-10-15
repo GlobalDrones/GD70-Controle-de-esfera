@@ -19,7 +19,7 @@ No modelo, o firmware anterior **diverge** em qualquer direção de empurrão. O
 
 | Item | Status | Onde |
 |---|---|---|
-| SC-01 eixos espelhados | ✅ corrigido. ⚠️ A montagem da MPU (`IMU_MOUNT_DEG`, `IMU_Z_UP`) **precisa ser confirmada** pelo teste de eixos (BRINGUP, Etapa 3) | `passo_fusao`, `imu_para_corpo` |
+| SC-01 eixos espelhados | ✅ corrigido. Montagem informada em 15/10: BF empurra para −Y da MPU → `IMU_MOUNT_DEG = 90`. ⚠️ **Confirmar** pelo teste de eixos (BRINGUP, Etapa 3) | `passo_fusao`, `imu_para_corpo` |
 | SC-02 pêndulo duplo | ✅ Estimador da velocidade do CG implementado como **opção** (`G8 1`, `G9` = d pino→CG). O padrão continua L·gyro. ⚠️ Escolher na bancada | `passo_fusao` §6 |
 | SC-03 mistura em µs | ✅ Alocação força + torque com prioridade do yaw e fator comum | `realizar_controle` |
 | SC-04 calibração | ✅ 9 s, gate por desvio-padrão, `Z` força, malhas bloqueadas sem calibração | `calibrar_mpu` |

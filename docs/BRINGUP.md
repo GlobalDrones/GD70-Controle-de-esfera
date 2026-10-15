@@ -243,8 +243,16 @@ lado errado — muito melhor descobrir agora, sem motores.
      depois, parada deslocada, `sx` positivo;
    - na direção **+Y** → `wy` positivo e `wx` ≈ 0; `sy` positivo.
 
+   **Montagem informada em 15/10/2026:** o BF empurra para o **−Y da MPU**
+   (sentido de maior eficiência da hélice) → o firmware já vem com
+   `IMU_MOUNT_DEG = 90`. O teste acima confirma. Se o lado eficiente do BF
+   for o de **PWM < 1500** (confira no teste `m`: em qual meio-ciclo o
+   vento é mais forte), então PWM > 1500 empurra para +Y da MPU → use
+   `IMU_MOUNT_DEG = -90` e troque `kf_fwd`/`kf_rev` do motor a (comando `M`).
+
    Se não bater, ajuste a montagem no topo de `firmware/main.cpp` e regrave
-   (partindo de `IMU_MOUNT_DEG = 0`, `IMU_Z_UP = true`):
+   (as regras abaixo partem de `IMU_MOUNT_DEG = 0`; com 90 já gravado, some
+   +90 ao valor que a regra der):
    - empurrão +X aparece como `wy` **negativo** (e +Y como `wx` positivo) →
      `IMU_MOUNT_DEG = 90`;
    - +X aparece como `wy` **positivo** (e +Y como `wx` negativo) →

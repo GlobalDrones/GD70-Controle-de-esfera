@@ -27,12 +27,16 @@ int TwoWire::requestFrom(int,int){
   for(int i=0;i<3;i++){ Fbx+=motores[i].tx*P.F[i]; Fby+=motores[i].ty*P.F[i]; }
   double sxd=P.vx/LL, syd=P.vy/LL;
   double bxd= c*sxd+s*syd, byd=-s*sxd+c*syd;     // d(sx)/dt no corpo
-  double gyro_y=-bxd, gyro_x=byd;                // cinematica: rot +Y leva o CG p/ -X
+  double gyro_y=-bxd, gyro_x=byd;                // cinematica (CORPO): rot +Y leva o CG p/ -X
   // MPU no pino, esfera rigida ao cabo: a_b = x''_pino + g.sin(att) = F_total/m
   double ax=(Fbx + c*P.ex+s*P.ey)/M, ay=(Fby - s*P.ex+c*P.ey)/M;
   double k=16384/G;
-  put16((int16_t)lround(ax*k)); put16((int16_t)lround(ay*k)); put16((int16_t)16384); put16(0);
-  put16((int16_t)lround(gyro_x*180/M_PI*131)); put16((int16_t)lround(gyro_y*180/M_PI*131));
+  // corpo -> eixos da MPU montada a IMU_MOUNT_DEG (inversa de imu_para_corpo, Z para cima):
+  // o teste vale para a montagem que estiver declarada no firmware.
+  double am=IMU_MOUNT_DEG*M_PI/180, ca=cos(am), sa=sin(am);
+  double iax= ca*ax+sa*ay, iay=-sa*ax+ca*ay, igx= ca*gyro_x+sa*gyro_y, igy=-sa*gyro_x+ca*gyro_y;
+  put16((int16_t)lround(iax*k)); put16((int16_t)lround(iay*k)); put16((int16_t)16384); put16(0);
+  put16((int16_t)lround(igx*180/M_PI*131)); put16((int16_t)lround(igy*180/M_PI*131));
   put16((int16_t)lround(P.r*180/M_PI*131));
   return 14;
 }
