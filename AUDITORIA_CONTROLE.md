@@ -20,7 +20,9 @@ No modelo, o firmware anterior **diverge** em qualquer direção de empurrão. O
 | Item | Status | Onde |
 |---|---|---|
 | SC-01 eixos espelhados | ✅ corrigido. Montagem informada em 15/10: BF empurra para −Y da MPU → `IMU_MOUNT_DEG = 90`. ⚠️ **Confirmar** pelo teste de eixos (BRINGUP, Etapa 3) | `passo_fusao`, `imu_para_corpo` |
-| SC-02 pêndulo duplo | ✅ Estimador da velocidade do CG implementado como **opção** (`G8 1`, `G9` = d pino→CG). O padrão continua L·gyro. ⚠️ Escolher na bancada | `passo_fusao` §6 |
+| SC-02 pêndulo duplo | ✅ Ver SC-20 (15/10): o padrão agora é `G8 2`. O `G8 1` (CG absoluto) continua disponível, só para âncora fixa | `passo_fusao` §6–7 |
+| SC-20 bamboleio no pino lido como balanço | ✅ 15/10: modo 2 = velocidade do cabo relativa à âncora + freio do bamboleio (`G10`). ⚠️ Medir `d_pino_cg` (`G9`) | `passo_fusao` §7, `passo_controle_xy` |
+| SC-21 fusão: IIR antes da integração; empuxo na referência do acelerômetro | ✅ 15/10 | `passo_fusao` §5 |
 | SC-03 mistura em µs | ✅ Alocação força + torque com prioridade do yaw e fator comum | `realizar_controle` |
 | SC-04 calibração | ✅ 9 s, gate por desvio-padrão, `Z` força, malhas bloqueadas sem calibração | `calibrar_mpu` |
 | SC-05 zona morta do yaw | ✅ 0,35 → 0,05 °/s; rebias com limiar de 0,25 °/s | |
@@ -234,6 +236,39 @@ Na esfera pendurada, o acelerômetro mede a força do cabo dividida pela massa (
 - **SC-17** — `wx/wy` são chamados de "MUNDO" nos comentários e na TEL, mas são do corpo. O supervisório desenha o fantasma como se fosse mundo.
 
 ---
+
+### 🔴 SC-20 — Hélice fora do CG: o bamboleio da esfera entra na leitura (15/10/2026)
+**Observado na bancada:** quando a ventoinha age, a esfera gira em torno do pino (a hélice não está no CG) e aparece uma oscilação rápida na leitura.
+
+**Por quê:** com o CG muito perto do pino, quem endireita a esfera é só m·g·d (d = pino→CG), que é pequeno; a hélice, abaixo do CG, a torce com facilidade. O giroscópio mede a ATITUDE da esfera, então lê esse bamboleio como se fosse balanço do cabo, e o controle reage à rotação que ele mesmo causou. No modelo (d = 10–15 cm, hélice 30 cm abaixo do CG), o modo L·gyro deixava o **balanço do cabo com ζ ≈ 0,02–0,08**, praticamente sem amortecimento.
+
+**Correção (`G8 2`, padrão):**
+1. **Ângulo do cabo sem bamboleio.** A MPU fica junto ao pino, e o acelerômetro mede o ângulo do cabo RELATIVO à esfera: `a/g − F/(m·g) = atitude − cabo − (d/g)·atitude''`. Daí `cabo = atitude(gyro) − relativo(acc) − (d/g)·atitude''`. No bamboleio, atitude e relativo andam juntos e se cancelam. O empuxo F vem do próprio comando dos ESCs, atrasado como o ESC (τ = 0,12 s).
+2. **Observador do pêndulo** (`x'' = −g/L·x + F/m − d·atitude''`), com banda baixa (0,25 Hz). Ele dá a velocidade do pino **relativa à âncora**: é o que se quer zerar com o drone, e o modo 1 não mede isso.
+3. **Freio do bamboleio:** `F = −vel_kp·v_cabo − k_bamb·(atitude' − cabo')`. Sem esse termo, o bamboleio fica neutro e qualquer erro de estimativa o realimenta.
+
+**Validação** (`firmware/host_sim/harness_duplo.cpp` + `tests/test_firmware_host.py`): firmware real contra um pêndulo duplo, varrendo 192 combinações:
+- d = 5 a 25 cm;
+- hélice 15 a 45 cm abaixo do CG;
+- I = 1,5 a 3 kg·m²;
+- pino solto ou rígido;
+- empuxo real ±30% em relação ao modelo;
+- L = 5 e 10 m;
+- empurrão e drone andando 1 m.
+
+| Modo | Pior resíduo após ~7 s (d ≥ 10 cm) | Diverge? |
+|---|---|---|
+| 0 (L·gyro) | 56–82 cm | não, mas mal amortecido |
+| 2 com observador de 0,7 Hz (1ª versão) | até 5 m | **sim**, com kf errado |
+| **2 com observador de 0,25 Hz (adotado)** | **≈ 11 cm** | **não**, em nenhum caso |
+
+Com d = 5 cm, o bamboleio cai na mesma frequência do pêndulo e nenhuma realimentação por um único ponto de empuxo separa bem os dois (pior: 44 cm, contra 110 cm do modo 0).
+
+⚠️ Depende de `G9` (pino→CG) e da curva de empuxo. Os dois foram testados com erro, mas medir melhora.
+
+### 🟠 SC-21 — Fusão: integração atrasada e empuxo na referência do acelerômetro (15/10/2026)
+- A atitude era integrada a partir da taxa **já filtrada** pelo IIR de ~8 Hz, o que a atrasava ~20 ms em relação ao acelerômetro. No bamboleio, esse descompasso vira ângulo falso. Agora integra a taxa crua; o IIR fica só na saída usada pelo controle.
+- A referência lenta do filtro complementar (acelerômetro) não descontava o empuxo: 15 N viravam ~7° de "inclinação" falsa puxando a atitude. Agora desconta F/(m·g).
 
 ## 2. Heading (yaw)
 

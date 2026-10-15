@@ -184,8 +184,11 @@ void init_motores_padrao() {
 //   5: yaw_kd       -> Kd do heading [N.m / (rad/s)]
 //   6: yaw_tz_max   -> Torque maximo de heading [N.m]
 //   7: yaw_int_max  -> Limite da integral do heading [rad.s]
-//   8: vel_mode     -> Fonte da velocidade XY: 0 = L*gyro, 1 = estimador do CG (SC-02)
-//   9: d_pino_cg    -> Distancia pino -> CG [m] (usada pelo estimador)
+//   8: vel_mode     -> Fonte da velocidade XY: 0 = L*gyro, 1 = estimador do CG (absoluta,
+//                      so com ancora fixa), 2 = cabo relativo a ancora (gyro+acc, SC-20)
+//   9: d_pino_cg    -> Distancia pino -> CG [m] (usada pelos estimadores)
+//  10: k_bamb       -> (vel_mode 2) freio do bamboleio: forca por velocidade de rotacao da
+//                      esfera RELATIVA ao cabo [N.s/rad] (SC-20)
 // Ponto de partida do heading para Iz ~ 1,73 kg.m2: wn ~ 2,4 rad/s, zeta ~ 0,85.
 struct ControllerGains {
   float vel_kp;
@@ -198,6 +201,7 @@ struct ControllerGains {
   float yaw_int_max;
   float vel_mode;
   float d_pino_cg;
+  float k_bamb;
 };
 
 ControllerGains ganhos = {
@@ -209,10 +213,11 @@ ControllerGains ganhos = {
   7.0f,   // G5: yaw_kd [N.m.s/rad]
   8.0f,   // G6: yaw_tz_max [N.m]
   0.5f,   // G7: yaw_int_max [rad.s]
-  0.0f,   // G8: vel_mode (0 = gyro; 1 = estimador do CG — testar na bancada)
-  0.10f   // G9: d_pino_cg [m] (CG logo abaixo do pino; medir)
+  2.0f,   // G8: vel_mode (2 = cabo relativo + freio do bamboleio — SC-20)
+  0.15f,  // G9: d_pino_cg [m] (CG logo abaixo do pino; medir)
+  6.0f    // G10: k_bamb [N.s/rad]
 };
-const int N_GAINS = 10;
+const int N_GAINS = 11;
 
 // Parametros do cabo (L em metros)
 const float L_MIN = 0.5f, L_MAX = 6.0f;
@@ -239,6 +244,13 @@ const unsigned long CALIB_MS      = 9000;
 const float CALIB_MAX_STD_DPS     = 0.30f;
 // Estimador da velocidade do CG (SC-02): integrador com vazamento da aceleracao do pino.
 const float TAU_VPIN_S            = 8.0f;
+// Observador da velocidade do CABO relativa a ancora (vel_mode 2, SC-20). Banda BAIXA de
+// proposito (0,25 Hz): confia no modelo do pendulo e pouco na medida instantanea, que e
+// sensivel ao erro do modelo de empuxo. Em simulacao (pendulo duplo, 192 combinacoes de
+// geometria, L, rigidez do pino e kf +-30%) 0,25 Hz nunca divergiu; 0,5-0,7 Hz divergiam.
+const float OBS_WN                = 2.0f * PI * 0.25f;  // [rad/s]
+const float OBS_ZETA              = 0.8f;
+const float TAU_ESC_S             = 0.12f;  // atraso ESC+helice (empuxo real ~ comando filtrado)
 // Falha da MPU (SC-15): apos N leituras seguidas sem resposta, malhas off + ESCs neutro.
 const int   MPU_FAIL_LIMIT        = 10;
 
@@ -261,6 +273,14 @@ float sx_est = 0.0f, sy_est = 0.0f; // Atitude da esfera no CORPO [rad] (sx>0: d
 float wx_est = 0.0f, wy_est = 0.0f; // d(sx)/dt, d(sy)/dt filtradas, no CORPO [rad/s]
 float vpin_x = 0.0f, vpin_y = 0.0f; // Velocidade do pino (estimador SC-02) [m/s]
 float vcg_x = 0.0f, vcg_y = 0.0f;   // Velocidade do CG estimada (SC-02) [m/s]
+// vel_mode 2 (SC-20): angulo do CABO = atitude (gyro) - angulo relativo (acelerometro),
+// o que cancela o bamboleio da esfera no pino; observador da a velocidade relativa.
+float Fapl_x = 0.0f, Fapl_y = 0.0f; // Forca XY efetivamente comandada aos ESCs, corpo [N]
+float Fest_x = 0.0f, Fest_y = 0.0f; // ... atrasada como o ESC (empuxo real estimado) [N]
+float tcab_x = 0.0f, tcab_y = 0.0f; // Angulo do cabo medido [rad] (telemetria/depuracao)
+float xob_x = 0.0f, xob_y = 0.0f;   // Observador: posicao do pino relativa a ancora [m]
+float vob_x = 0.0f, vob_y = 0.0f;   // Observador: velocidade do pino relativa a ancora [m/s]
+float wxa_prev = 0.0f, wya_prev = 0.0f, alfa_x = 0.0f, alfa_y = 0.0f; // aceleracao angular
 int   mpu_falhas = 0;               // Leituras seguidas sem resposta (SC-15)
 bool  mpu_falhou = false;           // Latch de falha (limpa em 'z'/'Z' bem-sucedido)
 float theta_total_deg = 0.0f;       // Inclinacao escalar total [graus]
@@ -543,6 +563,8 @@ bool calibrar_mpu(bool verboso, bool forcar) {
 
   sx_est = 0; sy_est = 0; wx_est = 0; wy_est = 0;
   vpin_x = vpin_y = vcg_x = vcg_y = 0.0f;
+  xob_x = xob_y = vob_x = vob_y = 0.0f;
+  alfa_x = alfa_y = wxa_prev = wya_prev = 0.0f;
   rate_z_filt = 0;
   yaw_gyro = desired_yaw;
   integral_error_yaw = 0;
@@ -616,15 +638,20 @@ void passo_fusao(const MpuSample &s, float dt) {
   // F/(m.g) (15 N ~ 7 graus falsos). O gate por modulo nao rejeita isso. A constante longa
   // (tau ~ 10 s) limita o efeito a um passa-altas suave na atitude; a velocidade do
   // anti-balanco nao depende deste angulo.
-  float th_acc_x = atan2f(abx, abz) - theta_offset_x;
-  float th_acc_y = atan2f(aby, abz) - theta_offset_y;
+  // (SC-21) Desconta o empuxo conhecido (Fest, atrasado como o ESC): sem isso, 15 N viravam
+  // ~7 graus de "inclinacao" falsa puxando a atitude. Fest vem do passo anterior.
+  const float mg_f = M_KG * G_ACC;
+  float th_acc_x = atan2f(abx, abz) - theta_offset_x - Fest_x / mg_f;
+  float th_acc_y = atan2f(aby, abz) - theta_offset_y - Fest_y / mg_f;
 
   // 5. Fusao complementar da ATITUDE da esfera no corpo (tau ~ 10 s).
   //    Aqui SIM entra o transporte: uma inclinacao fixa no mundo, vista do corpo que gira,
   //    roda com -wz (s' = gyro - w x s). Na VELOCIDADE ele nao entra (SC-07).
   float wz_r = raw_yaw_rate_dps * (PI / 180.0f);
-  float dsx = (wx_est + wz_r * sy_est) * dt;
-  float dsy = (wy_est - wz_r * sx_est) * dt;
+  //    (SC-21) Integra a taxa SEM o IIR: o filtro (para o controle) atrasava a atitude ~20 ms
+  //    em relacao ao acelerometro, e no bamboleio isso aparecia como angulo de cabo falso.
+  float dsx = (rate_x + wz_r * sy_est) * dt;
+  float dsy = (rate_y - wz_r * sx_est) * dt;
   if (acc_ok) {
     sx_est = ALPHA_FUSAO * (sx_est + dsx) + (1.0f - ALPHA_FUSAO) * th_acc_x;
     sy_est = ALPHA_FUSAO * (sy_est + dsy) + (1.0f - ALPHA_FUSAO) * th_acc_y;
@@ -648,6 +675,40 @@ void passo_fusao(const MpuSample &s, float dt) {
   vpin_y += (apin_y - wz_r * vx0 - vy0 / TAU_VPIN_S) * dt;
   vcg_x = vpin_x + ganhos.d_pino_cg * wx_est;
   vcg_y = vpin_y + ganhos.d_pino_cg * wy_est;
+
+  // 7. (SC-20) Velocidade do CABO relativa a ancora — vel_mode 2.
+  //    O empuxo fora do CG gira a esfera em torno do pino (bamboleio) e o gyro le essa
+  //    rotacao como se fosse balanco. Mas o acelerometro, junto ao pino, mede o angulo do
+  //    cabo RELATIVO a esfera: a_b/g - F/(m.g) = atitude - cabo - (d/g).atitude''.
+  //    Logo  cabo = atitude(gyro) - relativo(acc) - (d/g).atitude''  — no bamboleio a
+  //    atitude e o relativo se movem juntos e se cancelam. Um observador do pendulo
+  //    (x'' = -g/L.x + F/m - d.atitude'') filtra e da a velocidade do pino em relacao a
+  //    ancora — que e o que deve ser zerado com ancora em drone (o gyro tambem e relativo,
+  //    o vel_mode 1 nao: ele integra aceleracao absoluta).
+  float a_esc = dt / (TAU_ESC_S + dt);
+  Fest_x += a_esc * (Fapl_x - Fest_x);
+  Fest_y += a_esc * (Fapl_y - Fest_y);
+  float ax_raw = (wx_est - wxa_prev) / dt, ay_raw = (wy_est - wya_prev) / dt;
+  wxa_prev = wx_est; wya_prev = wy_est;
+  float a_alf = dt / (0.04f + dt);                     // passa-baixas ~4 Hz na derivada
+  alfa_x += a_alf * (ax_raw - alfa_x);
+  alfa_y += a_alf * (ay_raw - alfa_y);
+  const float mg = M_KG * G_ACC;
+  float d_pc = ganhos.d_pino_cg;
+  float rel_x = atan2f(abx, abz) - theta_offset_x - Fest_x / mg;
+  float rel_y = atan2f(aby, abz) - theta_offset_y - Fest_y / mg;
+  tcab_x = sx_est - rel_x - (d_pc / G_ACC) * alfa_x;
+  tcab_y = sy_est - rel_y - (d_pc / G_ACC) * alfa_y;
+  float Lc = fmaxf(L_M, L_MIN);
+  float l1 = 2.0f * OBS_ZETA * OBS_WN;
+  float l2 = fmaxf(OBS_WN * OBS_WN - G_ACC / Lc, 0.0f);
+  float ex = Lc * tcab_x - xob_x, ey = Lc * tcab_y - xob_y;
+  float x0 = xob_x, y0 = xob_y, u0 = vob_x, v0 = vob_y;
+  // estados sao vetores do mundo guardados no corpo: giram com -wz
+  xob_x += (u0 + wz_r * y0 + l1 * ex) * dt;
+  xob_y += (v0 - wz_r * x0 + l1 * ey) * dt;
+  vob_x += (-G_ACC / Lc * x0 + Fest_x / M_KG - d_pc * alfa_x + wz_r * v0 + l2 * ex) * dt;
+  vob_y += (-G_ACC / Lc * y0 + Fest_y / M_KG - d_pc * alfa_y - wz_r * u0 + l2 * ey) * dt;
 }
 
 // =========================================================================================
@@ -685,8 +746,17 @@ void passo_controle_xy(float dt) {
     return;
   }
 
-  // Velocidade no CORPO: L * taxa de atitude (vel_mode 0) ou estimador do CG (vel_mode 1)
-  if (ganhos.vel_mode >= 0.5f) {
+  // Velocidade no CORPO: 0 = L * taxa de atitude (gyro) | 1 = estimador do CG (absoluta)
+  //                     2 = cabo relativo a ancora (gyro + acelerometro, SC-20)
+  if (ganhos.vel_mode >= 1.5f) {
+    // Velocidade do cabo + freio do bamboleio (rotacao da esfera relativa ao cabo):
+    //   F = -vel_kp * v_cabo - k_bamb * (atitude' - cabo')
+    // Escrito como velocidade equivalente para usar o mesmo PID: vhat = v + (k_bamb/kp).rel'
+    float Lc = fmaxf(L_M, L_MIN);
+    float kb = (ganhos.vel_kp > 0.1f) ? ganhos.k_bamb / ganhos.vel_kp : 0.0f;
+    vhat_x = vob_x + kb * (wx_est - vob_x / Lc);
+    vhat_y = vob_y + kb * (wy_est - vob_y / Lc);
+  } else if (ganhos.vel_mode >= 0.5f) {
     vhat_x = vcg_x;
     vhat_y = vcg_y;
   } else {
@@ -784,10 +854,26 @@ float us_from_force(int i, float f_n) {
   return (f_n > 0.0f ? 1.0f : -1.0f) * us;
 }
 
+// Forca de um motor para um pulso (inversa de us_from_force) [N]
+float forca_de_us(int i, float du) {
+  float a = fabsf(du) - motores[i].dz_us;
+  if (a <= 0.0f) return 0.0f;
+  float kf = (du > 0.0f) ? motores[i].kf_fwd : motores[i].kf_rev;
+  return (du > 0.0f ? 1.0f : -1.0f) * kf * a * a;
+}
+
 void escrever_escs(int us_a, int us_b, int us_c) {
   esc_us_atual[0] = us_a;
   esc_us_atual[1] = us_b;
   esc_us_atual[2] = us_c;
+  // Forca XY que estes pulsos produzem (para o vel_mode 2 descontar do acelerometro)
+  int us[3] = {us_a, us_b, us_c};
+  Fapl_x = Fapl_y = 0.0f;
+  for (int i = 0; i < 3; i++) {
+    float f = forca_de_us(i, (float)(us[i] - ESC_NEUTRAL));
+    Fapl_x += motores[i].tx * f;
+    Fapl_y += motores[i].ty * f;
+  }
   esc_a.writeMicroseconds(us_a);
   esc_b.writeMicroseconds(us_b);
   esc_c.writeMicroseconds(us_c);
@@ -988,12 +1074,12 @@ void testarIdentificacaoMotores() {
 // =========================================================================================
 const char *GAIN_NAMES[N_GAINS] = {
   "vel_kp", "vel_ki", "vel_kd", "yaw_kp", "yaw_ki",
-  "yaw_kd", "yaw_tz_max", "yaw_int_max", "vel_mode", "d_pino_cg"
+  "yaw_kd", "yaw_tz_max", "yaw_int_max", "vel_mode", "d_pino_cg", "k_bamb"
 };
 // (SC-19) Faixas aceitas por ganho: valores fora (inclusive NaN/inf) sao RECUSADOS.
 // Isso tambem barra o twin Python, que manda G3..G7 com a semantica antiga (ex.: 900).
-const float GAIN_MIN[N_GAINS] = { 0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, 0.0f, 0.0f, 0.0f };
-const float GAIN_MAX[N_GAINS] = { 80.0f, 20.0f, 20.0f, 60.0f, 20.0f, 40.0f, 20.0f, 5.0f, 1.0f, 1.0f };
+const float GAIN_MIN[N_GAINS] = { 0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f,  0.0f, 0.0f, 0.0f, 0.0f, 0.0f };
+const float GAIN_MAX[N_GAINS] = { 80.0f, 20.0f, 20.0f, 60.0f, 20.0f, 40.0f, 20.0f, 5.0f, 2.0f, 1.0f, 40.0f };
 
 float *gain_ptr(int idx) {
   switch (idx) {
@@ -1002,6 +1088,7 @@ float *gain_ptr(int idx) {
     case 4: return &ganhos.yaw_ki;      case 5: return &ganhos.yaw_kd;
     case 6: return &ganhos.yaw_tz_max;  case 7: return &ganhos.yaw_int_max;
     case 8: return &ganhos.vel_mode;    case 9: return &ganhos.d_pino_cg;
+    case 10: return &ganhos.k_bamb;
   }
   return nullptr;
 }
@@ -1323,7 +1410,8 @@ void processar_serial(Stream &porta, String &buf, bool &descartando) {
 // =========================================================================================
 void enviar_telemetria() {
   // flags: 1 yaw_on | 2 swing_on | 4 calib_ok | 8 visao | 16 wizard | 32 MPU em falha |
-  //        64 repouso no prumo | 128 yaw em repouso | 256 vel_mode = estimador
+  //        64 repouso no prumo | 128 yaw em repouso | 256 vel_mode 1 (CG absoluto) |
+  //        512 vel_mode 2 (cabo relativo)
   unsigned flags = (yaw_ativo ? 1 : 0) |
                    (anti_balanco_ativo ? 2 : 0) |
                    (calib_ok ? 4 : 0) |
@@ -1332,7 +1420,8 @@ void enviar_telemetria() {
                    (mpu_falhou ? 32 : 0) |
                    (repouso_prumo_ativo ? 64 : 0) |
                    (yaw_em_repouso ? 128 : 0) |
-                   (ganhos.vel_mode >= 0.5f ? 256 : 0);
+                   ((ganhos.vel_mode >= 0.5f && ganhos.vel_mode < 1.5f) ? 256 : 0) |
+                   (ganhos.vel_mode >= 1.5f ? 512 : 0);
 
   char line[256], num[16];
   int n = snprintf(line, sizeof(line), "TEL,%lu,", millis());

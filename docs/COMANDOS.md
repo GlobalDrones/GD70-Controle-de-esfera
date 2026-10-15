@@ -80,8 +80,9 @@ Regra do supervisório: em modo **simulador**, as teclas e botões mexem só no 
 | 5 | `yaw_kd` | N·m·s/rad | 7 | 0–40 |
 | 6 | `yaw_tz_max` | N·m | 8 | 0–20 |
 | 7 | `yaw_int_max` | rad·s | 0,5 | 0–5 |
-| 8 | `vel_mode` | 0 = L·gyro, 1 = estimador do CG | 0 | 0–1 |
-| 9 | `d_pino_cg` | m | 0,10 | 0–1 |
+| 8 | `vel_mode` | 0 = L·gyro · 1 = CG absoluto (só âncora fixa) · 2 = cabo relativo + freio do bamboleio | **2** | 0–2 |
+| 9 | `d_pino_cg` | m (distância pino → CG; medir) | 0,15 | 0–1 |
+| 10 | `k_bamb` | N·s/rad (freio do bamboleio da esfera no pino, modo 2) | 6 | 0–40 |
 
 Os índices 3–7 mudaram de significado em 14/10/2026: o heading agora é controlado em torque. O twin Python (`twin/window.py`) ainda manda os ganhos do controlador Python nesses índices. O firmware **recusa** esses valores por estarem fora da faixa, então use o supervisório para ajustar os ganhos do hardware.
 
@@ -103,5 +104,5 @@ TEL,t_ms,yaw,bearing,yaw_des,rate_z,sx,sy,wx,wy,pwm_a,pwm_b,pwm_c,L,D,flags,F_cm
 
 - `sx`, `sy`, `wx`, `wy` são do **corpo**: `sx > 0` = esfera deslocada para +X, que é a direção em que o motor a empurra.
 - `F_cmd` está em N (corpo), `Tz` em N·m e `vhat` em m/s (corpo).
-- `flags`: 1 yaw · 2 anti-balanço · 4 calib OK · 8 visão · 16 wizard · 32 MPU em falha · 64 repouso no prumo · 128 yaw no alvo · 256 velocidade pelo estimador.
+- `flags`: 1 yaw · 2 anti-balanço · 4 calib OK · 8 visão · 16 wizard · 32 MPU em falha · 64 repouso no prumo · 128 yaw no alvo · 256 vel_mode 1 · 512 vel_mode 2.
 - O SimSTM continua mandando 16 campos; os parsers aceitam 16 ou 21.

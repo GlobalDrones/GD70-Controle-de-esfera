@@ -7,7 +7,7 @@
 // Uso (g++ ou clang):  g++ -std=gnu++17 -O1 -w -I. harness.cpp -o harness && ./harness
 //   saida: uma linha por caso "SWING psi dir modo pico_cm..." e "YAW t erro_graus"
 // tests/test_firmware_host.py compila, roda e confere os limites.
-// Para testar o estimador do CG: ./harness est
+// Modo de velocidade: ./harness [0|1|2]  (sem argumento = o default do firmware)
 #include "Arduino.h"
 #include "Wire.h"
 #include <vector>
@@ -65,20 +65,20 @@ static void reset_all(double psi){
 }
 
 int main(int argc,char**argv){
-  bool est = argc>1 && std::string(argv[1])=="est";
+  float modo = -1; if(argc>1) modo = atof(argv[1]);
   double dirs[][2]={{1,0},{0,1},{0.7071,0.7071}};
   for(double psi: {0.0, 90.0, 180.0}) for(auto&d: dirs){
     reset_all(psi);
-    if(est){ ganhos.vel_mode=1.0f; }
+    if(modo>=0) ganhos.vel_mode=modo;
     cmd("p\n"); run(0.1);
     P.ex=36*d[0]; P.ey=36*d[1]; run(0.1); P.ex=P.ey=0;   // empurrao: 0,3 m/s
-    printf("SWING %.0f %.2f %.2f %s", psi, d[0], d[1], est?"est":"gyro");
+    printf("SWING %.0f %.2f %.2f m%.0f", psi, d[0], d[1], ganhos.vel_mode);
     for(int w=0;w<6;w++){ double pk=0; for(int k=0;k<9;k++){run(0.25); pk=fmax(pk,amp());} printf(" %.2f",pk*100); }
     printf("\n");
   }
   // degrau de heading de 30 graus durante um balanco
   reset_all(0);
-  if(est) ganhos.vel_mode=1.0f;
+  if(modo>=0) ganhos.vel_mode=modo;
   cmd("p\n"); run(0.1); cmd("y\n"); run(0.1);
   P.ex=36; run(0.1); P.ex=0; cmd("30\n");
   for(int k=1;k<=8;k++){ run(0.5); printf("YAW %.1f %.2f %.2f\n", k*0.5, 30.0 - P.psi*180/M_PI, amp()*100); }

@@ -6,7 +6,8 @@ Telemetria (25 Hz, linha CSV):
 
 ângulos em graus, taxas em °/s, PWM em µs, L/D em metros (D = −1 sem visão).
 flags (bits): 1=yaw_on 2=swing_on 4=calib_ok 8=visão fresca 16=wizard
-              32=MPU em falha 64=repouso no prumo 128=yaw em repouso 256=vel_mode estimador.
+              32=MPU em falha 64=repouso no prumo 128=yaw em repouso
+              256=vel_mode 1 (CG absoluto) 512=vel_mode 2 (cabo + bamboleio).
 
 TEL v3 (firmware de 14/10/2026) acrescenta 5 campos ao final:
 F_cmd_x, F_cmd_y [N, corpo], Tz [N·m], vhat_x, vhat_y [m/s, corpo]. O parser aceita
@@ -31,7 +32,7 @@ GAIN_NAMES = (
 
 FIRMWARE_GAIN_NAMES = (
     "vel_kp", "vel_ki", "vel_kd", "yaw_kp", "yaw_ki",
-    "yaw_kd", "yaw_tz_max", "yaw_int_max", "vel_mode", "d_pino_cg",
+    "yaw_kd", "yaw_tz_max", "yaw_int_max", "vel_mode", "d_pino_cg", "k_bamb",
 )
 
 FLAG_YAW_ON = 1
@@ -42,7 +43,8 @@ FLAG_WIZARD = 16
 FLAG_MPU_FAIL = 32
 FLAG_REST_PLUMB = 64
 FLAG_YAW_REST = 128
-FLAG_VEL_ESTIMATOR = 256
+FLAG_VEL_ESTIMATOR = 256   # vel_mode 1 (CG absoluto)
+FLAG_VEL_CABLE = 512       # vel_mode 2 (cabo relativo + freio do bamboleio, padrão)
 
 
 @dataclass

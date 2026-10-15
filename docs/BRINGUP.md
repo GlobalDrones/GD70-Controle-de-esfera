@@ -483,10 +483,25 @@ Mantenha a esfera pendurada livre e a tecla `k` à mão.
    **contra** `v̂`. Perto do prumo (< ~0,35°) os motores desligam de
    propósito (zona de repouso).
 
-   Velocidade pelo estimador do CG (opcional, `G8 1` ou botão no
-   supervisório): repita o teste. Se amortecer melhor (sobretudo se com
-   `G8 0` o `wx/wy` cai rápido mas a esfera continua indo e vindo), mantenha;
-   ajuste `G9` = distância pino→CG medida;
+   **Fonte da velocidade (G8).** O padrão é `G8 2`: velocidade do **cabo**
+   relativa à âncora, que cancela o bamboleio da esfera no pino, mais um freio
+   desse bamboleio (`G10 k_bamb`). Antes de ligar:
+   - meça a distância **pino → CG** e grave em `G9` (ex.: `G9 0.12`). Para
+     achar o CG, pendure a esfera por dois pontos diferentes e cruze as
+     verticais, ou equilibre-a numa aresta;
+   - confira `L` (`t` em balanço livre, ou `L<m>`).
+
+   Sinais de ajuste:
+   - o cabo para, mas a **esfera fica bamboleando** no pino: aumente `G10`
+     (6 → 10);
+   - o bamboleio para, mas o **cabo demora**: aumente `vel_kp` (`G0`);
+   - se aparecer uma oscilação lenta crescente: volte `G8 0` e avise —
+     provavelmente `G9` ou a curva de empuxo (kf) estão muito errados.
+
+   Para comparar, `G8 0` é o modo antigo (L·gyro). Ele mede o bamboleio como
+   se fosse balanço e, com o CG perto do pino, quase não amortece o cabo.
+   `G8 1` (CG absoluto) só serve com âncora fixa: com drone, ele mede a
+   velocidade absoluta, não a relativa;
 
    **Se a oscilação crescer em vez de diminuir, pressione `k` imediatamente.**
    Isso indica um eixo com sinal invertido — volte à Etapa 3 e repita os

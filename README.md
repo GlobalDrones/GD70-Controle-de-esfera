@@ -182,7 +182,9 @@ Saída: `calib.json` saneado e push opcional à RAM do STM.
 >   lateral nas manobras de yaw); ganhos G3–G7 mudaram de unidade.
 > - Calibração do gyro de ~9 s com gate real (`z` recusa movimento, `Z` força); malhas não
 >   ligam sem calibração; falha da MPU desliga tudo; visão por evento com latência.
-> - Estimador opcional da velocidade do CG (`G8 1`) — testar na bancada.
+> - **15/10:** a hélice fora do CG faz a esfera bamboleiar no pino e o gyro lia isso como
+>   balanço. Novo padrão `G8 2`: velocidade do **cabo** relativa à âncora (gyro + acelerômetro,
+>   cancela o bamboleio) + freio do bamboleio (`G10`). Ver AUDITORIA_CONTROLE.md SC-20/21.
 > - `firmware/host_sim/`: o firmware real roda no PC em malha fechada contra um pêndulo
 >   simulado (`tests/test_firmware_host.py`, precisa de g++/clang).
 >
