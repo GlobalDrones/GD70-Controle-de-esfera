@@ -239,16 +239,28 @@ def main():
         bridge.update_frame(display)
 
         # Atualiza a janela local so se GUI_ENABLED for True (dispensavel se visualizar pelo PC/navegador)
-        if GUI_ENABLED and (now - t_gui_last) >= gui_period:
-            t_gui_last = now
-            disp_local = display
-            if GUI_SCALE != 1.0:
-                disp_local = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
-                                        interpolation=cv2.INTER_AREA)
-            cv2.imshow("Stereo Profundidade", disp_local)
-        
-        k = cv2.waitKey(1) & 0xFF
-        if k == 255:
+        k = -1
+        if GUI_ENABLED:
+            if (now - t_gui_last) >= gui_period:
+                t_gui_last = now
+                disp_local = display
+                if GUI_SCALE != 1.0:
+                    disp_local = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
+                                            interpolation=cv2.INTER_AREA)
+                try:
+                    cv2.imshow("Stereo Profundidade", disp_local)
+                except Exception as e:
+                    print(f"[AVISO] Nao foi possivel abrir janela OpenCV: {e}. Desativando GUI local.")
+                    GUI_ENABLED = False
+            if GUI_ENABLED:
+                try:
+                    k = cv2.waitKey(1) & 0xFF
+                except Exception:
+                    k = -1
+        else:
+            time.sleep(0.001)
+
+        if k == -1 or k == 255:
             continue
         ch = chr(k) if k < 128 else ""
 
@@ -314,7 +326,11 @@ def main():
     cam1.stop()
     if arduino is not None:
         arduino.close()
-    cv2.destroyAllWindows()
+    if GUI_ENABLED:
+        try:
+            cv2.destroyAllWindows()
+        except Exception:
+            pass
     print("[OK] Encerrado graciosamente")
 
 if __name__ == "__main__":

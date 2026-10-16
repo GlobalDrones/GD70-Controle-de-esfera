@@ -26,8 +26,10 @@ FRAME_H = 720
 #   ESFERA_GUI=0          -> sem janela (headless; teclas de comando desativadas)
 #   ESFERA_GUI_FPS=10     -> maximo de atualizacoes da janela por segundo
 #   ESFERA_GUI_SCALE=0.6  -> escala do painel exibido (so afeta a tela, nao a visao)
-# ===========================================================================
-GUI_ENABLED = os.environ.get("ESFERA_GUI", "1") != "0"
+# Auto-detecta ambiente grafico: se nao houver $DISPLAY nem $WAYLAND_DISPLAY (ex: terminal SSH),
+# ou se o usuario desativar com ESFERA_GUI=0, desativa a janela local para nao crashar o Qt/xcb.
+_has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
+GUI_ENABLED = (os.environ.get("ESFERA_GUI", "1" if _has_display else "0") != "0") and _has_display
 GUI_MAX_FPS = float(os.environ.get("ESFERA_GUI_FPS", "10"))
 GUI_SCALE = float(os.environ.get("ESFERA_GUI_SCALE", "0.6"))
 
