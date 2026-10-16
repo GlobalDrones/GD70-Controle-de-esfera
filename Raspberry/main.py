@@ -19,7 +19,7 @@ if arduino is not None:
 # MAIN
 # ===========================================================================
 def main():
-    global visao_atualiza_angulo
+    global visao_atualiza_angulo, GUI_ENABLED
     cmtx0, dist0, cmtx1, dist1, R_rel, T_rel = load_params()
     sgbm = SGBMParams()
     left_m, right_m, wls = sgbm.build()
@@ -69,9 +69,13 @@ def main():
     historico_angulos = deque(maxlen=1)
     media_angulo = 0
     if GUI_ENABLED:
-        cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
-    else:
-        print("[INFO] GUI desativada (ESFERA_GUI=0): sem janela, teclas de comando indisponiveis.")
+        try:
+            cv2.namedWindow("Stereo Profundidade", cv2.WINDOW_NORMAL)
+        except Exception as e:
+            print(f"[AVISO] Nao foi possivel abrir janela OpenCV: {e}. Desativando GUI local.")
+            GUI_ENABLED = False
+    if not GUI_ENABLED:
+        print("[INFO] GUI local desativada (headless): stream ativo em http://<IP>:8080/supervisorio_esfera.html")
     gui_period = 1.0 / max(GUI_MAX_FPS, 0.1)
     t_gui_last = 0.0
     
