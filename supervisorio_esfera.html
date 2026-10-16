@@ -868,14 +868,14 @@
             </g>
           </svg>
 
-          <div class="polia-bottom-label">POLIA (45v)</div>
+          <div class="polia-bottom-label">POLIA (140v)</div>
         </div>
 
-        <!-- Dados de Voltas, Porcentagem (base 45 voltas) e Controles -->
+        <!-- Dados de Voltas, Porcentagem (base 140 voltas) e Controles -->
         <div class="polia-info-col">
           <div class="polia-stat-row">
-            <span style="color:var(--text-muted); font-weight:600;">Voltas (de 45v):</span>
-            <strong id="lblPoliaVoltas" style="font-size:0.92rem; color:var(--text-main); font-family:Consolas,monospace;">0.00 / 45 v</strong>
+            <span style="color:var(--text-muted); font-weight:600;">Voltas (de 140v):</span>
+            <strong id="lblPoliaVoltas" style="font-size:0.92rem; color:var(--text-main); font-family:Consolas,monospace;">0.00 / 140 v</strong>
           </div>
 
           <div class="polia-stat-row">
@@ -908,7 +908,7 @@
               ⟲ Zerar (0v)
             </button>
             <span style="font-size:0.61rem; color:var(--text-muted); margin-left:auto;">100%=</span>
-            <input type="number" id="inputPoliaMaxTurns" class="form-control" value="45.0" min="0.5" max="500" step="0.5" style="padding:1px 4px; font-size:0.65rem; width:50px;" onchange="applyPoliaMaxTurns()">
+            <input type="number" id="inputPoliaMaxTurns" class="form-control" value="140.0" min="0.5" max="500" step="0.5" style="padding:1px 4px; font-size:0.65rem; width:50px;" onchange="applyPoliaMaxTurns()">
             <span style="font-size:0.61rem; color:var(--text-muted);">v</span>
           </div>
         </div>
@@ -1624,7 +1624,7 @@
       vision_on: false,
       enc_ok: true,
       enc_voltas: 0.0,
-      enc_voltas_max: 45.0,
+      enc_voltas_max: 140.0,
       enc_pct: 0.0,
       enc_estado: 0, // -1 = abrindo ('a'), 0 = Parado, +1 = fechando ('d')
       pinca_locked: true, // true = Cadeado Travado (Baixo 's'), false = Cadeado Aberto (Cima 'w')
@@ -3009,7 +3009,7 @@
       }
 
       const voltas = isFinite(s.enc_voltas) ? Math.abs(s.enc_voltas) : 0.0;
-      const vmax = isFinite(s.enc_voltas_max) && s.enc_voltas_max > 0 ? s.enc_voltas_max : 45.0;
+      const vmax = isFinite(s.enc_voltas_max) && s.enc_voltas_max > 0 ? s.enc_voltas_max : 140.0;
       const pctPolia = isFinite(s.enc_pct) ? s.enc_pct : 0.0;
       const pctClamped = Math.max(0, Math.min(100, pctPolia));
       document.getElementById("lblPoliaVoltas").innerText = `${voltas.toFixed(1)} / ${vmax.toFixed(0)} v`;

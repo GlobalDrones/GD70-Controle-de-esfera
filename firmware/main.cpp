@@ -329,7 +329,7 @@ bool  enc_conectado = false;
 int   enc_raw_anterior = 0;
 long  enc_passos_acum = 0;       // 4096 passos = 1 volta completa
 float enc_voltas = 0.0f;         // Voltas acumuladas (com sinal: + fechando, - abrindo)
-float enc_voltas_max = 45.0f;    // Curso total p/ 100% [voltas] (~45 voltas medido na bancada)
+float enc_voltas_max = 140.0f;    // Curso total p/ 100% [voltas] (~140 voltas medido na bancada)
 float enc_pct = 0.0f;            // Porcentagem de voltas dadas (0 a 100%)
 float enc_vel_dps = 0.0f;        // Velocidade angular filtrada do encoder [graus/s]
 int   enc_estado = 0;            // -1 = Abrindo, 0 = Parado, +1 = Fechando
