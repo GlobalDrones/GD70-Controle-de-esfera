@@ -322,6 +322,19 @@ bool bateuCima = false, bateuBaixo = false;
 unsigned long ultimo_comando_polia_ms = 0;
 const unsigned long TIMEOUT_POLIA_MS  = 250; // Watchdog de seguranca da polia [ms]
 bool polia_em_movimento = false;
+int  polia_sentido = 0; // -1 = Abrindo ('a'), +1 = Fechando ('d'), 0 = Parado ('c')
+
+// Estado do Encoder Magnetico AS5600 (Polia / Fixacao da Espera)
+bool  enc_conectado = false;
+int   enc_raw_anterior = 0;
+long  enc_passos_acum = 0;       // 4096 passos = 1 volta completa
+float enc_voltas = 0.0f;         // Voltas acumuladas (com sinal: + fechando, - abrindo)
+float enc_voltas_max = 45.0f;    // Curso total p/ 100% [voltas] (~45 voltas medido na bancada)
+float enc_pct = 0.0f;            // Porcentagem de voltas dadas (0 a 100%)
+float enc_vel_dps = 0.0f;        // Velocidade angular filtrada do encoder [graus/s]
+int   enc_estado = 0;            // -1 = Abrindo, 0 = Parado, +1 = Fechando
+int   enc_dir_sign = 1;          // Auto-alinhado com 'a' (Abrir) e 'd' (Fechar)
+unsigned long ultimo_retry_enc_ms = 0;
 
 int estadoEstavelOlhal = HIGH, ultimoEstadoFisicoOlhal = HIGH;
 unsigned long ultimoTempoFiltro = 0;
@@ -978,6 +991,7 @@ void pararBTS() {
   digitalWrite(POLIA_LPWM_PIN, LOW);
   digitalWrite(LED_PIN, HIGH);
   polia_em_movimento = false;
+  polia_sentido = 0;
   Serial.println(">> POLIA: Motor PARADO");
 }
 
@@ -988,7 +1002,8 @@ void girarSentidoA() {
   digitalWrite(LED_PIN, LOW);
   ultimo_comando_polia_ms = millis();
   polia_em_movimento = true;
-  Serial.println(">> POLIA: Girando SENTIDO A (Horario)");
+  polia_sentido = -1; // 'a' = ABRIR
+  Serial.println(">> POLIA: ABRINDO (Sentido A)");
 }
 
 void girarSentidoD() {
@@ -998,18 +1013,102 @@ void girarSentidoD() {
   digitalWrite(LED_PIN, LOW);
   ultimo_comando_polia_ms = millis();
   polia_em_movimento = true;
-  Serial.println(">> POLIA: Girando SENTIDO D (Anti-horario)");
+  polia_sentido = 1;  // 'd' = FECHAR
+  Serial.println(">> POLIA: FECHANDO (Sentido D)");
+}
+
+void eco(const String &msg);
+
+void zerarEncoderAS5600() {
+  if (encoder.isConnected()) {
+    enc_conectado = true;
+    enc_raw_anterior = encoder.readAngle();
+  }
+  enc_passos_acum = 0;
+  enc_voltas = 0.0f;
+  enc_pct = 0.0f;
+  enc_vel_dps = 0.0f;
+  enc_estado = 0;
+  eco(">> [AS5600]: Contador de voltas ZERADO (0.00 voltas / 0%).");
+}
+
+void atualizarEncoderAS5600(float dt) {
+  if (!enc_conectado) {
+    if (millis() - ultimo_retry_enc_ms >= 1000) {
+      ultimo_retry_enc_ms = millis();
+      if (encoder.isConnected()) {
+        enc_conectado = true;
+        enc_raw_anterior = encoder.readAngle();
+      }
+    }
+    if (!enc_conectado) {
+      enc_estado = polia_em_movimento ? polia_sentido : 0;
+      return;
+    }
+  }
+
+  int raw = encoder.readAngle();
+  if (raw < 0 || raw > 4095) {
+    enc_conectado = false;
+    enc_estado = polia_em_movimento ? polia_sentido : 0;
+    return;
+  }
+
+  int delta = raw - enc_raw_anterior;
+  if (delta > 2048)  delta -= 4096;
+  if (delta < -2048) delta += 4096;
+  enc_raw_anterior = raw;
+
+  // Se o motor da polia esta acionado ('a' = -1 abrir, 'd' = +1 fechar) e o ima girou,
+  // garante que o sinal de contagem coincida com Abrir (-) e Fechar (+)
+  if (polia_em_movimento && polia_sentido != 0 && abs(delta) >= 6) {
+    if ((polia_sentido < 0 && (delta * enc_dir_sign) > 0) ||
+        (polia_sentido > 0 && (delta * enc_dir_sign) < 0)) {
+      enc_dir_sign = -enc_dir_sign;
+    }
+  }
+
+  int delta_corr = delta * enc_dir_sign;
+  enc_passos_acum += delta_corr;
+  enc_voltas = (float)enc_passos_acum / 4096.0f;
+
+  float dt_s = fmaxf(dt, 0.005f);
+  float vel_inst_dps = ((float)delta_corr * (360.0f / 4096.0f)) / dt_s;
+  enc_vel_dps = 0.45f * vel_inst_dps + 0.55f * enc_vel_dps;
+
+  const float ENC_DEADZONE_DPS = 8.0f;
+  if (fabsf(enc_vel_dps) >= ENC_DEADZONE_DPS) {
+    enc_estado = (enc_vel_dps > 0.0f) ? 1 : -1; // +1 = Fechando, -1 = Abrindo
+  } else {
+    enc_estado = 0; // Parado
+  }
+
+  float v_abs = fabsf(enc_voltas);
+  enc_pct = (enc_voltas_max > 0.01f)
+            ? constrain((v_abs / enc_voltas_max) * 100.0f, 0.0f, 100.0f)
+            : 0.0f;
 }
 
 void lerEncoderAS5600() {
   if (encoder.isConnected()) {
+    enc_conectado = true;
     int anguloBruto = encoder.readAngle();
     float graus = (anguloBruto / 4095.0f) * 360.0f;
-    Serial.print(">> AS5600 - Angulo Bruto: ");
+    const char *estTxt = (enc_estado < 0) ? "ABRINDO" : ((enc_estado > 0) ? "FECHANDO" : "PARADO");
+    Serial.print(">> AS5600 - Bruto: ");
     Serial.print(anguloBruto);
     Serial.print(" | Graus: ");
-    Serial.println(graus, 2);
+    Serial.print(graus, 2);
+    Serial.print(" | Voltas: ");
+    Serial.print(enc_voltas, 2);
+    Serial.print(" (");
+    Serial.print(enc_pct, 1);
+    Serial.print("% de ");
+    Serial.print(enc_voltas_max, 2);
+    Serial.print(") | Estado: ");
+    Serial.println(estTxt);
   } else {
+    enc_conectado = false;
     Serial.println("[ERRO] AS5600 nao encontrado! Verifique a fiacao I2C.");
   }
 }
@@ -1253,6 +1352,24 @@ void comando_linha(const String &cmd) {
     return;
   }
 
+  // E0 (zera voltas do AS5600) ou E<voltas_max> (define curso total para 100%)
+  if (cmd[0] == 'E' && cmd.length() > 1) {
+    float val = NAN;
+    if (ler_float(cmd.substring(1), val)) {
+      if (fabsf(val) < 1e-4f) {
+        zerarEncoderAS5600();
+      } else if (val > 0.05f && val <= 500.0f) {
+        enc_voltas_max = val;
+        float v_abs = fabsf(enc_voltas);
+        enc_pct = constrain((v_abs / enc_voltas_max) * 100.0f, 0.0f, 100.0f);
+        char b[16];
+        fmt_f2(b, enc_voltas_max);
+        eco(String(">> [AS5600]: Curso 100% ajustado para ") + b + " voltas.");
+      }
+    }
+    return;
+  }
+
   // R: retorna todos os ganhos atuais
   if (cmd[0] == 'R') {
     for (int i = 0; i < N_GAINS; i++) {
@@ -1411,7 +1528,8 @@ void processar_serial(Stream &porta, String &buf, bool &descartando) {
 void enviar_telemetria() {
   // flags: 1 yaw_on | 2 swing_on | 4 calib_ok | 8 visao | 16 wizard | 32 MPU em falha |
   //        64 repouso no prumo | 128 yaw em repouso | 256 vel_mode 1 (CG absoluto) |
-  //        512 vel_mode 2 (cabo relativo)
+  //        512 vel_mode 2 (cabo relativo) | 1024 pinca subindo | 2048 pinca descendo |
+  //        4096 fim de curso cima | 8192 fim de curso baixo
   unsigned flags = (yaw_ativo ? 1 : 0) |
                    (anti_balanco_ativo ? 2 : 0) |
                    (calib_ok ? 4 : 0) |
@@ -1421,9 +1539,13 @@ void enviar_telemetria() {
                    (repouso_prumo_ativo ? 64 : 0) |
                    (yaw_em_repouso ? 128 : 0) |
                    ((ganhos.vel_mode >= 0.5f && ganhos.vel_mode < 1.5f) ? 256 : 0) |
-                   (ganhos.vel_mode >= 1.5f ? 512 : 0);
+                   (ganhos.vel_mode >= 1.5f ? 512 : 0) |
+                   (estadoMotor == 1 ? 1024 : 0) |
+                   (estadoMotor == -1 ? 2048 : 0) |
+                   (bateuCima ? 4096 : 0) |
+                   (bateuBaixo ? 8192 : 0);
 
-  char line[256], num[16];
+  char line[320], num[16];
   int n = snprintf(line, sizeof(line), "TEL,%lu,", millis());
   fmt_f2(num, yaw_gyro);                               n += snprintf(line + n, sizeof(line) - n, "%s,", num);
   fmt_f2(num, vision_fresh() ? vision_bearing : 0.0f); n += snprintf(line + n, sizeof(line) - n, "%s,", num);
@@ -1445,7 +1567,12 @@ void enviar_telemetria() {
   fmt_f2(num, F_cmd_y); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
   fmt_f2(num, tz_cmd);  n += snprintf(line + n, sizeof(line) - n, ",%s", num);
   fmt_f3(num, vhat_x);  n += snprintf(line + n, sizeof(line) - n, ",%s", num);
-  fmt_f3(num, vhat_y);  snprintf(line + n, sizeof(line) - n, ",%s", num);
+  fmt_f3(num, vhat_y);  n += snprintf(line + n, sizeof(line) - n, ",%s", num);
+  // Campos 22..25 (Encoder AS5600 da Polia): conectado (0/1), voltas, porcentagem (%), estado (-1=Abrindo, 0=Parado, 1=Fechando)
+  n += snprintf(line + n, sizeof(line) - n, ",%d", enc_conectado ? 1 : 0);
+  fmt_f2(num, enc_voltas); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
+  fmt_f2(num, enc_pct);    n += snprintf(line + n, sizeof(line) - n, ",%s", num);
+  snprintf(line + n, sizeof(line) - n, ",%d", enc_estado);
 
   Serial.println(line);
   Serial2.println(line);
@@ -1497,6 +1624,10 @@ void setup() {
   pinMode(SENSOR_OLHAL_D0, INPUT);
   pinMode(SENSOR_OLHAL_A0, INPUT);
   encoder.begin();
+  if (encoder.isConnected()) {
+    enc_conectado = true;
+    enc_raw_anterior = encoder.readAngle();
+  }
 
   init_mpu();
   if (!calibrar_mpu(true, false)) {
@@ -1512,11 +1643,11 @@ void setup() {
   Serial.println("==========================================================");
   Serial.println(" ESFERA CONSOLIDADA — YAWBOM + ANTI-BALANCO DE VELOCIDADE ");
   Serial.println("  PINCA:   w=sobe | s=desce | x=para                      ");
-  Serial.println("  POLIA:   a=giro A | d=giro D | c=para (repetir a/d<250ms)");
+  Serial.println("  POLIA:   a=ABRIR | d=FECHAR | c=para (repetir a/d<250ms)");
   Serial.println("  MALHAS:  y=heading on/off | p=anti-balanco on/off       ");
   Serial.println("  YAW:     <graus>=degrau relativo | 0=zera setpoint      ");
   Serial.println("  MPU:     z=calibra (recusa movimento) | Z=forca         ");
-  Serial.println("  OUTROS:  e=AS5600 | t=L pelo periodo | L2.0 | m=teste   ");
+  Serial.println("  OUTROS:  e=AS5600 | E0=zera voltas | E<v>=100% | t=L    ");
   Serial.println("  LINHAS:  G<i> <v> | R | V<b> <D> [ms] | W.. | M..       ");
   Serial.println("  PARADA GERAL: k  (tabela completa: docs/COMANDOS.md)    ");
   Serial.println("==========================================================");
@@ -1594,9 +1725,11 @@ void loop() {
     }
   }
 
-  // --- Telemetria a 25 Hz ---
+  // --- Telemetria e Leitura do AS5600 a 25 Hz (fora da malha de 200 Hz) ---
   if (millis() - last_telemetry_ms >= TELEMETRY_INTERVAL) {
+    float dt_tel = (millis() - last_telemetry_ms) * 1e-3f;
     last_telemetry_ms = millis();
+    atualizarEncoderAS5600(dt_tel);
     enviar_telemetria();
   }
 

@@ -121,6 +121,50 @@ def _make_http_handler(bridge):
                 self.wfile.write(json.dumps({"success": ok, "cmd": cmd}).encode("utf-8"))
                 return
 
+            if parsed.path in ("/api/video", "/video", "/stream.mjpg"):
+                self.send_response(200)
+                self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
+                self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
+                self.send_header("Pragma", "no-cache")
+                self.send_header("Expires", "0")
+                self.send_header("Access-Control-Allow-Origin", "*")
+                self.end_headers()
+                last_sent_id = -1
+                try:
+                    while bridge._http_server is not None:
+                        current_id = bridge._frame_id
+                        jpeg_bytes = None
+                        if current_id != last_sent_id:
+                            with bridge._frame_lock:
+                                jpeg_bytes = bridge.last_frame_jpeg
+                                last_sent_id = current_id
+                        if jpeg_bytes is not None:
+                            self.wfile.write(b"--frame\r\n")
+                            self.wfile.write(b"Content-Type: image/jpeg\r\n")
+                            self.wfile.write(f"Content-Length: {len(jpeg_bytes)}\r\n\r\n".encode("ascii"))
+                            self.wfile.write(jpeg_bytes)
+                            self.wfile.write(b"\r\n")
+                            self.wfile.flush()
+                        time.sleep(0.04)  # ~25 FPS max
+                except Exception:
+                    pass
+                return
+
+            if parsed.path in ("/api/snapshot", "/snapshot.jpg"):
+                jpeg_bytes = None
+                with bridge._frame_lock:
+                    jpeg_bytes = bridge.last_frame_jpeg
+                if jpeg_bytes is not None:
+                    self.send_response(200)
+                    self.send_header("Content-Type", "image/jpeg")
+                    self.send_header("Content-Length", str(len(jpeg_bytes)))
+                    self.send_header("Access-Control-Allow-Origin", "*")
+                    self.end_headers()
+                    self.wfile.write(jpeg_bytes)
+                else:
+                    self.send_error(503, "Camera frame not available yet")
+                return
+
             if parsed.path in ("/", "/index.html"):
                 self.path = "/supervisorio_esfera.html"
 
@@ -130,8 +174,8 @@ def _make_http_handler(bridge):
 
 
 class Bridge:
-    """Servidor TCP (porta 9999) + HTTP/SSE (porta 8080): broadcast de linhas
-    do STM; comandos dos clientes viram chamadas a ``on_client_line``."""
+    """Servidor TCP (porta 9999) + HTTP/SSE/MJPEG (porta 8080): broadcast de linhas
+    do STM, telemetria SSE e streaming de vídeo da câmera ao vivo."""
 
     def __init__(
         self,
@@ -150,6 +194,32 @@ class Bridge:
         self._sse_lock = threading.Lock()
         self._http_server = None
         self.last_line = ""
+
+        # Buffer de vídeo para streaming HTTP (MJPEG)
+        self.last_frame_jpeg = None
+        self._frame_lock = threading.Lock()
+        self._frame_id = 0
+
+    def update_frame(self, frame_bgr_or_jpeg, quality: int = 70) -> None:
+        """Atualiza o último quadro da câmera para streaming HTTP/MJPEG."""
+        if frame_bgr_or_jpeg is None:
+            return
+        if isinstance(frame_bgr_or_jpeg, (bytes, bytearray)):
+            with self._frame_lock:
+                self.last_frame_jpeg = bytes(frame_bgr_or_jpeg)
+                self._frame_id += 1
+            return
+
+        try:
+            import cv2
+            encode_params = [int(cv2.IMWRITE_JPEG_QUALITY), int(quality)]
+            ret, jpeg = cv2.imencode(".jpg", frame_bgr_or_jpeg, encode_params)
+            if ret:
+                with self._frame_lock:
+                    self.last_frame_jpeg = jpeg.tobytes()
+                    self._frame_id += 1
+        except Exception:
+            pass
 
     def broadcast(self, line: str) -> None:
         """Envia uma linha do STM a todos os clientes TCP e navegadores SSE."""

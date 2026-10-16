@@ -372,6 +372,77 @@
       color: var(--text-muted);
     }
     .help-box strong { color: var(--cyan); }
+
+    /* Card Visual da Polia (AS5600) e Pinça (Ponte H2 - Cadeado) */
+    .polia-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 7px;
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: 106px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    .polia-visual-box {
+      background: linear-gradient(180deg, #0b1120 0%, #070a12 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 7px;
+      padding: 5px 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 108px;
+      user-select: none;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .polia-top-label {
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-align: center;
+    }
+    .polia-top-label.parado   { color: var(--amber); }
+    .polia-top-label.abrindo  { color: var(--cyan); }
+    .polia-top-label.fechando { color: var(--green); }
+    .polia-bottom-label {
+      font-size: 0.64rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-align: center;
+    }
+    .polia-info-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .polia-stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 0.72rem;
+    }
+    @keyframes spinCW {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    @keyframes spinCCW {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(-360deg); }
+    }
+    .polia-wheel-cw {
+      transform-origin: 50px 50px;
+      animation: spinCW 2.4s linear infinite;
+    }
+    .polia-wheel-ccw {
+      transform-origin: 50px 50px;
+      animation: spinCCW 2.4s linear infinite;
+    }
   </style>
 </head>
 <body>
@@ -560,27 +631,23 @@
         <span>4. Bancada & Mecanismos STM32</span>
       </div>
       <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:4px;">
-        <button class="btn" onclick="sendRawCmd('w')">▲ Pinça (w)</button>
-        <button class="btn" onclick="sendRawCmd('s')">▼ Pinça (s)</button>
-        <button class="btn" onclick="sendRawCmd('x')">■ Parar (x)</button>
-        <button class="btn" onclick="sendRawCmd('a')">↻ Polia (a)</button>
-        <button class="btn" onclick="sendRawCmd('d')">↺ Polia (d)</button>
-        <button class="btn" onclick="sendRawCmd('c')">■ Parar (c)</button>
-        <button class="btn" onclick="sendRawCmd('z')">Calib MPU (z) ~9 s</button>
+        <button class="btn" onclick="cmdPinca('w')">🔓 Pinça Cima (w)</button>
+        <button class="btn" onclick="cmdPinca('s')">🔒 Pinça Baixo (s)</button>
+        <button class="btn" onclick="cmdPinca('x')">■ Parar Pinça (x)</button>
+        <button class="btn" onmousedown="startPoliaHold('a')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()" ontouchstart="startPoliaHold('a'); event.preventDefault();" ontouchend="stopPoliaHold()">↻ Abrir (a)</button>
+        <button class="btn" onmousedown="startPoliaHold('d')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()" ontouchstart="startPoliaHold('d'); event.preventDefault();" ontouchend="stopPoliaHold()">↺ Fechar (d)</button>
+        <button class="btn" onclick="stopPoliaHold(true)">■ Parar Polia (c)</button>
+        <button class="btn" onclick="sendRawCmd('z')">Calib MPU (z)</button>
         <button class="btn" onclick="sendRawCmd('t')">Medir L (t)</button>
         <button class="btn" onclick="confirmMotorTest()">Teste Mot (m)</button>
-        <button class="btn" onclick="sendRawCmd('e')">AS5600 (e)</button>
-        <button class="btn" onclick="sendRawCmd('R')">Ler ganhos (R)</button>
-        <button class="btn" onclick="toggleVelMode()">v̂: modo 0/1/2 (G8)</button>
       </div>
 
       <!-- Atalhos de Teclado (interactive.py) -->
       <div class="help-box">
         <strong>TECLADO (igual à Rasp e ao twin — docs/COMANDOS.md):</strong><br>
         Letra do STM = tecla: <b>k</b> parada · <b>p</b> anti-balanço · <b>y</b> heading · <b>0</b> zera ψ<br>
-        <b>z</b> calib MPU · <b>t</b> medir L · <b>w/s/x</b> pinça · <b>a/d/c</b> polia · <b>e</b> AS5600<br>
-        <b>[ ]</b> ψ_des −15°/+15° · <b>G</b> ganho · <b>+/−</b> ajusta · <b>R</b> ler ganhos<br>
-        Só simulador: setas força · <b>, .</b> torque · <b>r</b> reset · <b>espaço</b> pausa
+        <b>z</b> calib MPU · <b>t</b> medir L · <b>w/s/x</b> pinça (abrir/travar) · <b>a/d/c</b> polia (abrir/fechar)<br>
+        <b>[ ]</b> ψ_des −15°/+15° · Só simulador: setas força · <b>, .</b> torque · <b>r</b> reset · <b>espaço</b> pausa
       </div>
     </div>
 
@@ -605,13 +672,28 @@
           </div>
         </div>
 
-        <!-- Gráfico XY e Yaw (Vista Superior da Esfera + Linha de Transmissão) -->
-        <div class="canvas-container">
-          <div class="canvas-header">
-            <span>GRÁFICO XY & YAW • TRAJETÓRIA NO PLANO DO MUNDO + APONTAMENTO ψ</span>
-            <span style="font-size:0.65rem; color:var(--text-muted);">Círculo L · Vetor ψ · Linha D</span>
+        <!-- Aba Visual Dupla: Gráfico XY / Radar e Câmera ao Vivo da Raspberry Pi -->
+        <div class="canvas-container" id="containerBottomVisual">
+          <div class="canvas-header" style="justify-content: space-between;">
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button class="btn btn-primary" id="btnTabRadar" style="padding:2px 7px; font-size:0.64rem;" onclick="switchVisualTab('radar')">📊 Gráfico XY / Radar</button>
+              <button class="btn" id="btnTabCamera" style="padding:2px 7px; font-size:0.64rem;" onclick="switchVisualTab('camera')">📷 Câmera ao Vivo (Raspberry)</button>
+            </div>
+            <div style="display:flex; gap:4px; align-items:center;">
+              <span id="badgeCameraStatus" style="font-size:0.62rem; color:var(--text-muted); display:none;">⚪ OFFLINE</span>
+              <button class="btn" id="btnPopoutCamera" style="padding:1px 6px; font-size:0.62rem; display:none;" onclick="openCameraPopout()" title="Abrir stream de vídeo em janela separada">🔗 Janela</button>
+            </div>
           </div>
           <canvas id="canvasXY" class="canvas-body"></canvas>
+          <div id="cameraFeedWrapper" style="display:none; flex:1; width:100%; height:100%; min-height:0; background:#04060b; position:relative; align-items:center; justify-content:center; overflow:hidden;">
+            <img id="cameraStreamImg" src="" alt="Stream Câmera" style="width:100%; height:100%; object-fit:contain; display:none;">
+            <div id="cameraPlaceholder" style="display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.75rem; padding:15px; text-align:center;">
+              <div style="font-size:2rem; margin-bottom:6px;">📷</div>
+              <strong style="color:var(--cyan); margin-bottom:4px;">CÂMERA DA RASPBERRY PI 5 (SEM VNC)</strong>
+              <span>Conecte na aba <b>Rasp (HTTP/SSE)</b> para iniciar o streaming de vídeo ao vivo.</span>
+              <span style="font-size:0.66rem; margin-top:6px; color:#64748b;">Endpoint HTTP: <code>/api/video</code> (MJPEG acelerado)</span>
+            </div>
+          </div>
         </div>
       </div>
 
@@ -666,7 +748,7 @@
     </div>
 
     <!-- =================================================================
-         COLUNA DIREITA: TELEMETRIA, MOTORES, 8 GANHOS (ControllerGains)
+         COLUNA DIREITA: TELEMETRIA, POLIA AS5600, MOTORES, GANHOS
          ================================================================= -->
     <div class="card">
       <div class="card-title">
@@ -698,6 +780,215 @@
         <div class="kpi-box">
           <span class="kpi-label">Cabo L / Dist. D</span>
           <div class="kpi-value" style="font-size:0.84rem;"><span id="kpiLD">5.00m / —</span></div>
+        </div>
+      </div>
+
+      <!-- Widget Visual da Polia & Fixação da Espera (Encoder AS5600) -->
+      <div class="card-title">
+        <span>Ponte H1: Polia & Espera (AS5600)</span>
+        <span id="badgeEncStatus" style="font-size:0.62rem; color:var(--green);">AS5600 PRONTO</span>
+      </div>
+
+      <div class="polia-card">
+        <!-- Ícone Vetorial Profissional dos 3 Estados: Parado (Polia), Fechando (Anti-Horário), Abrindo (Horário) -->
+        <div class="polia-visual-box">
+          <div class="polia-top-label parado" id="poliaTopLabel">PARADO</div>
+
+          <svg id="poliaSvg" width="66" height="66" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <radialGradient id="pulleyGrad" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#334155"/>
+                <stop offset="70%" stop-color="#1e293b"/>
+                <stop offset="100%" stop-color="#0f172a"/>
+              </radialGradient>
+            </defs>
+
+            <!-- 1. PARADO: Ícone vetorial técnico de uma Polia Mecânica -->
+            <g id="svgPoliaParado">
+              <!-- Cabos tangentes da polia -->
+              <line x1="20" y1="50" x2="20" y2="92" stroke="#64748b" stroke-width="2.5" stroke-dasharray="3 2"/>
+              <line x1="80" y1="50" x2="80" y2="92" stroke="#64748b" stroke-width="2.5" stroke-dasharray="3 2"/>
+              <!-- Suporte superior / olhal da polia -->
+              <path d="M 43 18 V 11 C 43 7, 57 7, 57 11 V 18" stroke="#94a3b8" stroke-width="2.8" fill="none"/>
+              <!-- Roda da Polia com canaleta -->
+              <circle cx="50" cy="50" r="32" fill="url(#pulleyGrad)" stroke="#f59e0b" stroke-width="3.2"/>
+              <circle cx="50" cy="50" r="26.5" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 3"/>
+              <!-- 6 Furos de alívio da polia -->
+              <circle cx="50" cy="32" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="65.6" cy="41" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="65.6" cy="59" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="50" cy="68" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="34.4" cy="59" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="34.4" cy="41" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <!-- Cubo central e eixo -->
+              <circle cx="50" cy="50" r="10.5" fill="#1e293b" stroke="#f59e0b" stroke-width="2.2"/>
+              <circle cx="50" cy="50" r="4.2" fill="#090d16" stroke="#cbd5e1" stroke-width="1.5"/>
+            </g>
+
+            <!-- 2. FECHANDO (d): Polia girando em sentido ANTI-HORÁRIO (CCW) + Setas Vetoriais CCW -->
+            <g id="svgPoliaFechando" style="display:none;">
+              <g class="polia-wheel-ccw">
+                <circle cx="50" cy="50" r="24" fill="url(#pulleyGrad)" stroke="#10b981" stroke-width="2.6"/>
+                <circle cx="50" cy="50" r="19.5" stroke="#6ee7b7" stroke-width="1.1" stroke-dasharray="4 3"/>
+                <circle cx="50" cy="36.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="63.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="50" r="8" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
+                <circle cx="50" cy="50" r="3.2" fill="#090d16"/>
+              </g>
+              <!-- Arcos externos com setas em sentido ANTI-HORÁRIO (CCW: Topo -> Esquerda -> Base -> Direita) -->
+              <path d="M 77 21 A 39 39 0 0 0 13 38" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="7,27 13,40 24,33" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <path d="M 23 79 A 39 39 0 0 0 87 62" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="93,73 87,60 76,67" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </g>
+
+            <!-- 3. ABRINDO (a): Polia girando em sentido HORÁRIO (CW) + Setas Vetoriais CW -->
+            <g id="svgPoliaAbrindo" style="display:none;">
+              <g class="polia-wheel-cw">
+                <circle cx="50" cy="50" r="24" fill="url(#pulleyGrad)" stroke="#38bdf8" stroke-width="2.6"/>
+                <circle cx="50" cy="50" r="19.5" stroke="#7dd3fc" stroke-width="1.1" stroke-dasharray="4 3"/>
+                <circle cx="50" cy="36.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="63.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="50" r="8" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+                <circle cx="50" cy="50" r="3.2" fill="#090d16"/>
+              </g>
+              <!-- Arcos externos com setas em sentido HORÁRIO (CW: Topo -> Direita -> Base -> Esquerda) -->
+              <path d="M 23 21 A 39 39 0 0 1 87 38" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="93,27 87,40 76,33" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <path d="M 77 79 A 39 39 0 0 1 13 62" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="7,73 13,60 24,67" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </g>
+          </svg>
+
+          <div class="polia-bottom-label">POLIA (45v)</div>
+        </div>
+
+        <!-- Dados de Voltas, Porcentagem (base 45 voltas) e Controles -->
+        <div class="polia-info-col">
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Voltas (de 45v):</span>
+            <strong id="lblPoliaVoltas" style="font-size:0.92rem; color:var(--text-main); font-family:Consolas,monospace;">0.00 / 45 v</strong>
+          </div>
+
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Fechamento:</span>
+            <strong id="lblPoliaPct" style="font-size:0.92rem; color:var(--cyan); font-family:Consolas,monospace;">0.0%</strong>
+          </div>
+
+          <div class="progress-bar-bg" style="height:9px;">
+            <div class="progress-bar-fill" id="barPoliaPct" style="width:0%; background:linear-gradient(90deg, var(--cyan), var(--green));"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:4px; margin-top:3px;">
+            <button class="btn" style="padding:3px 4px; font-size:0.64rem;"
+                    onmousedown="startPoliaHold('a')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()"
+                    ontouchstart="startPoliaHold('a'); event.preventDefault();" ontouchend="stopPoliaHold()">
+              ↻ Abrir (a)
+            </button>
+            <button class="btn btn-success" style="padding:3px 4px; font-size:0.64rem;"
+                    onmousedown="startPoliaHold('d')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()"
+                    ontouchstart="startPoliaHold('d'); event.preventDefault();" ontouchend="stopPoliaHold()">
+              ↺ Fechar (d)
+            </button>
+            <button class="btn" style="padding:3px 4px; font-size:0.64rem;" onclick="stopPoliaHold(true)">
+              ■ Parar (c)
+            </button>
+          </div>
+
+          <div style="display:flex; gap:4px; align-items:center; margin-top:2px;">
+            <button class="btn" style="padding:2px 6px; font-size:0.62rem;" onclick="zeroPoliaTurns()" title="Zera o contador de voltas na posição atual (comando E0)">
+              ⟲ Zerar (0v)
+            </button>
+            <span style="font-size:0.61rem; color:var(--text-muted); margin-left:auto;">100%=</span>
+            <input type="number" id="inputPoliaMaxTurns" class="form-control" value="45.0" min="0.5" max="500" step="0.5" style="padding:1px 4px; font-size:0.65rem; width:50px;" onchange="applyPoliaMaxTurns()">
+            <span style="font-size:0.61rem; color:var(--text-muted);">v</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Widget Visual da Ponte H2: Pinça (BTS7960) — Cadeado Travado (Baixo) / Cadeado Aberto (Cima) -->
+      <div class="card-title">
+        <span>Ponte H2: Pinça (BTS7960)</span>
+        <span id="badgePincaLim" style="font-size:0.62rem; color:var(--text-muted);">PB14 / PB15</span>
+      </div>
+
+      <div class="polia-card">
+        <!-- Ícone Vetorial do Cadeado (Travado = Pinça p/ Baixo | Aberto = Pinça p/ Cima) -->
+        <div class="polia-visual-box" style="min-height:96px;">
+          <div class="polia-top-label fechado" id="pincaTopLabel">TRAVADA</div>
+
+          <svg id="pincaSvg" width="58" height="58" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="lockBodyLocked" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.28"/>
+                <stop offset="100%" stop-color="#065f46" stop-opacity="0.45"/>
+              </linearGradient>
+              <linearGradient id="lockBodyOpen" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#0369a1" stop-opacity="0.40"/>
+              </linearGradient>
+            </defs>
+
+            <!-- Caso 1: PINÇA PARA BAIXO (s) = CADEADO TRAVADO -->
+            <g id="svgPincaTravada">
+              <!-- Haste fechada -->
+              <path d="M 33 46 V 30 C 33 17, 67 17, 67 30 V 46"
+                    stroke="#10b981" stroke-width="6.5" stroke-linecap="round" fill="none"/>
+              <!-- Corpo do cadeado -->
+              <rect x="22" y="45" width="56" height="42" rx="8"
+                    fill="url(#lockBodyLocked)" stroke="#10b981" stroke-width="3.6"/>
+              <!-- Fechadura central -->
+              <circle cx="50" cy="62" r="5" fill="#10b981"/>
+              <path d="M 47.5 65 L 46 76 H 54 L 52.5 65 Z" fill="#10b981"/>
+            </g>
+
+            <!-- Caso 2: PINÇA PARA CIMA (w) = CADEADO ABERTO -->
+            <g id="svgPincaAberta" style="display:none;">
+              <!-- Haste erguida e destravada -->
+              <path d="M 33 46 V 22 C 33 9, 67 9, 67 21 V 29"
+                    stroke="#38bdf8" stroke-width="6.5" stroke-linecap="round" fill="none"/>
+              <!-- Corpo do cadeado -->
+              <rect x="22" y="45" width="56" height="42" rx="8"
+                    fill="url(#lockBodyOpen)" stroke="#38bdf8" stroke-width="3.6"/>
+              <!-- Fechadura central -->
+              <circle cx="50" cy="62" r="5" fill="#38bdf8"/>
+              <path d="M 47.5 65 L 46 76 H 54 L 52.5 65 Z" fill="#38bdf8"/>
+            </g>
+          </svg>
+
+          <div class="polia-bottom-label" id="pincaBottomLabel">PINÇA BAIXO</div>
+        </div>
+
+        <!-- Status e Botões de Acionamento da Pinça -->
+        <div class="polia-info-col">
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Posição:</span>
+            <strong id="lblPincaEstado" style="font-size:0.84rem; color:var(--green);">🔒 Travada (Baixo)</strong>
+          </div>
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Motor H2:</span>
+            <strong id="lblPincaMotor" style="font-size:0.76rem; color:var(--text-muted); font-family:Consolas,monospace;">PARADO</strong>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:4px; margin-top:3px;">
+            <button class="btn btn-primary" style="padding:4px 6px; font-size:0.66rem;" onclick="cmdPinca('w')">
+              🔓 Subir / Abrir (w)
+            </button>
+            <button class="btn btn-success" style="padding:4px 6px; font-size:0.66rem;" onclick="cmdPinca('s')">
+              🔒 Descer / Travar (s)
+            </button>
+          </div>
+          <button class="btn" style="padding:3px 6px; font-size:0.64rem; margin-top:2px;" onclick="cmdPinca('x')">
+            ■ Parar Pinça (x)
+          </button>
         </div>
       </div>
 
@@ -737,20 +1028,6 @@
           </div>
         </div>
       </div>
-
-      <!-- Ganhos do Controlador (8 Ganhos de protocol.py + Força Externa) -->
-      <div class="card-title">
-        <span>Ganhos (G seleciona · +/- ajusta)</span>
-        <button class="btn" style="padding:1px 6px; font-size:0.62rem;" onclick="sendRawCmd('R')">Ler STM (R)</button>
-      </div>
-
-      <div class="gains-grid" id="gainsGridContainer">
-        <!-- Gerado dinamicamente via JS para sincronizar com tecla G/+/- -->
-      </div>
-
-      <button class="btn btn-primary btn-block" onclick="pushAllGainsToSTM()">
-        📤 Enviar Todos os Ganhos ao STM (G0..G10)
-      </button>
 
       <!-- Console de Logs -->
       <div class="card-title">
@@ -1344,8 +1621,20 @@
       bearing_deg: 0.0,
       xy_on: true,
       yaw_on: true,
-      vision_on: false
+      vision_on: false,
+      enc_ok: true,
+      enc_voltas: 0.0,
+      enc_voltas_max: 45.0,
+      enc_pct: 0.0,
+      enc_estado: 0, // -1 = abrindo ('a'), 0 = Parado, +1 = fechando ('d')
+      pinca_locked: true, // true = Cadeado Travado (Baixo 's'), false = Cadeado Aberto (Cima 'w')
+      pinca_motor: 0,     // 1 = Subindo ('w'), -1 = Descendo ('s'), 0 = Parado ('x')
+      pinca_lim_cima: false,
+      pinca_lim_baixo: false
     };
+
+    let poliaHoldTimer = null;
+    let poliaHoldDir = 0; // -1 = 'a' (abrindo), +1 = 'd' (fechando), 0 = parado
 
     const MAX_HIST = 800; // ~32 s @ 25 Hz
     const hist = {
@@ -1460,6 +1749,15 @@
         simTime += SIM_DT;
         simTelAccum += SIM_DT;
 
+        // Simulação do giro da polia (a = Abrir = -1, d = Fechar = +1)
+        const simPoliaDir = poliaHoldDir !== 0 ? poliaHoldDir : (heldKeys.has("a") ? -1 : (heldKeys.has("d") ? 1 : 0));
+        activeState.enc_estado = simPoliaDir;
+        if (simPoliaDir !== 0) {
+          activeState.enc_voltas += simPoliaDir * 3.0 * SIM_DT; // 3.0 voltas/s no simulador (45v em 15s)
+          const vmax = Math.max(0.05, activeState.enc_voltas_max);
+          activeState.enc_pct = Math.min(100.0, Math.max(0.0, (Math.abs(activeState.enc_voltas) / vmax) * 100.0));
+        }
+
         const [tx, ty] = plant.tiltAngles(plant.state);
         activeState.t = simTime;
         activeState.px = plant.state.position[0];
@@ -1502,11 +1800,11 @@
       const line = rawLine.trim();
       if (!line) return;
 
-      // 1. Linha TEL: v2 (16 campos) ou v3 (21: + F_cmd_x, F_cmd_y, Tz, vhat_x, vhat_y).
+      // 1. Linha TEL: v2 (16 campos), v3 (21 campos) ou v3+AS5600 (25 campos).
       //    Desde 14/10/2026 sx/sy/wx/wy são do CORPO (sx>0 = deslocado para +X do motor a).
       if (line.startsWith("TEL,")) {
         const p = line.split(",");
-        if (p.length !== 16 && p.length !== 21) return;
+        if (p.length !== 16 && p.length !== 21 && p.length !== 25) return;
         const t_ms = parseFloat(p[1]);
         const yaw_deg = parseFloat(p[2]);
         const bearing_deg = parseFloat(p[3]);
@@ -1574,7 +1872,18 @@
         activeState.yaw_rest = Boolean(flags & 128);
         activeState.vel_est = Boolean(flags & 256);
         activeState.vel_cabo = Boolean(flags & 512);
-        if (p.length === 21) {
+        // Bits da Pinça (Ponte H2): 1024 subindo | 2048 descendo | 4096 fim cima | 8192 fim baixo
+        const pSubindo  = Boolean(flags & 1024);
+        const pDescendo = Boolean(flags & 2048);
+        const pLimCima  = Boolean(flags & 4096);
+        const pLimBaixo = Boolean(flags & 8192);
+        activeState.pinca_motor = pSubindo ? 1 : (pDescendo ? -1 : 0);
+        activeState.pinca_lim_cima = pLimCima;
+        activeState.pinca_lim_baixo = pLimBaixo;
+        if (pSubindo || pLimCima) activeState.pinca_locked = false; // Pinça p/ cima = Cadeado Aberto
+        if (pDescendo || pLimBaixo) activeState.pinca_locked = true; // Pinça p/ baixo = Cadeado Travado
+
+        if (p.length >= 21) {
           activeState.F_cmd = [parseFloat(p[16]), parseFloat(p[17])];
           activeState.tz_cmd = parseFloat(p[18]);
           activeState.vhat = [parseFloat(p[19]), parseFloat(p[20])];
@@ -1582,6 +1891,12 @@
           activeState.F_cmd = null;
           activeState.tz_cmd = null;
           activeState.vhat = null;
+        }
+        if (p.length === 25) {
+          activeState.enc_ok = parseInt(p[21], 10) === 1;
+          activeState.enc_voltas = parseFloat(p[22]);
+          activeState.enc_pct = parseFloat(p[23]);
+          activeState.enc_estado = parseInt(p[24], 10);
         }
         if (activeState.mpu_fail && !activeState._mpuFailLogged) {
           logMsg("⚠️ STM: MPU em FALHA — malhas desligadas. Verifique I2C e rode 'z'.");
@@ -1611,14 +1926,24 @@
           if (name in controller.gains && !isNaN(val)) {
             controller.gains[name] = val;
             controller.syncPIDGains();
-            renderGainsGrid();
             logMsg(`STM GAIN recebido: ${name} =${val}`);
           }
         }
         return;
       }
 
-      // 3. Outros logs do STM32
+      // 3. Mensagens da Pinça (Ponte H2)
+      if (line.includes("PINCA: SUBINDO") || line.includes("Atingiu o topo")) {
+        activeState.pinca_locked = false;
+        activeState.pinca_motor = line.includes("SUBINDO") ? 1 : 0;
+      } else if (line.includes("PINCA: DESCENDO") || line.includes("Atingiu a base")) {
+        activeState.pinca_locked = true;
+        activeState.pinca_motor = line.includes("DESCENDO") ? -1 : 0;
+      } else if (line.includes("PINCA: Motor PARADO")) {
+        activeState.pinca_motor = 0;
+      }
+
+      // 4. Outros logs do STM32
       logMsg(`STM: ${line}`);
     }
 
@@ -1657,12 +1982,65 @@
     }
 
     // --- A. Ponte HTTP/SSE da Raspberry Pi (bridge.py) ---
+    function updateCameraUI(connected) {
+      const badge = document.getElementById("badgeCameraStatus");
+      const btnPop = document.getElementById("btnPopoutCamera");
+      const img = document.getElementById("cameraStreamImg");
+      const holder = document.getElementById("cameraPlaceholder");
+      if (connected && raspBaseUrl) {
+        badge.style.display = "";
+        badge.innerText = "🟢 AO VIVO";
+        badge.style.color = "var(--green)";
+        btnPop.style.display = "";
+        img.src = `${raspBaseUrl}/api/video?t=${Date.now()}`;
+        img.style.display = "block";
+        holder.style.display = "none";
+      } else {
+        badge.innerText = "⚪ OFFLINE";
+        badge.style.color = "var(--text-muted)";
+        btnPop.style.display = "none";
+        img.src = "";
+        img.style.display = "none";
+        holder.style.display = "flex";
+      }
+    }
+
+    function switchVisualTab(tab) {
+      const cXY = document.getElementById("canvasXY");
+      const wrapCam = document.getElementById("cameraFeedWrapper");
+      const bRad = document.getElementById("btnTabRadar");
+      const bCam = document.getElementById("btnTabCamera");
+      if (tab === "camera") {
+        cXY.style.display = "none";
+        wrapCam.style.display = "flex";
+        bCam.className = "btn btn-primary";
+        bRad.className = "btn";
+        if (evtSource && raspBaseUrl) {
+          const img = document.getElementById("cameraStreamImg");
+          if (!img.src || img.src === window.location.href) {
+            img.src = `${raspBaseUrl}/api/video?t=${Date.now()}`;
+          }
+        }
+      } else {
+        wrapCam.style.display = "none";
+        cXY.style.display = "block";
+        bRad.className = "btn btn-primary";
+        bCam.className = "btn";
+      }
+    }
+
+    function openCameraPopout() {
+      const url = `${raspBaseUrl || "http://192.168.0.50:8080"}/api/video`;
+      window.open(url, "CameraEsfera", "width=850,height=520,menubar=no,toolbar=no");
+    }
+
     function toggleRaspConnection() {
       if (evtSource) {
         evtSource.close();
         evtSource = null;
         document.getElementById("btnConnectRasp").innerText = "📡 Conectar à Raspberry Pi";
         setRealTelemetryMode(false);
+        updateCameraUI(false);
         logMsg("Desconectado da Raspberry Pi.");
         return;
       }
@@ -1674,6 +2052,7 @@
         evtSource.onopen = () => {
           document.getElementById("btnConnectRasp").innerText = "❌ Desconectar Raspberry Pi";
           setRealTelemetryMode(true, `Rasp (${raspBaseUrl})`);
+          updateCameraUI(true);
           logMsg(`Conectado ao stream SSE da Raspberry Pi em ${streamUrl}`);
         };
         evtSource.onmessage = (e) => parseIncomingLine(e.data);
@@ -1965,76 +2344,64 @@
       reader.readAsText(file);
     }
 
-    // --- Grade dos 8 Ganhos (paridade consolidada com firmware YAWBOM) + Força Externa ---
-    const GAIN_DESCS = [
-      "vel_kp N/(m/s)",
-      "vel_ki",
-      "vel_kd",
-      "yaw_kp N·m/rad",
-      "yaw_ki N·m/(rad·s)",
-      "yaw_kd N·m·s/rad",
-      "yaw_tz_max N·m",
-      "yaw_int_max rad·s",
-      "vel_mode 0 gyro·1 abs·2 cabo",
-      "d_pino_cg m",
-      "k_bamb N·s/rad"
-    ];
-    const GAIN_STEPS = [1.0, 0.1, 0.1, 1.0, 0.2, 0.5, 0.5, 0.1, 1.0, 0.02, 1.0];
-
-    function getAdjustableList() {
-      return [
-        {
-          label: "força ext (N)",
-          get: () => extForceMag,
-          set: (v) => { extForceMag = Math.max(0, Math.min(60, v)); },
-          step: 2.0,
-          gainIdx: -1
-        },
-        ...GAIN_NAMES.map((name, idx) => ({
-          label: GAIN_DESCS[idx] || name,
-          get: () => controller.gains[name],
-          set: (v) => {
-            controller.gains[name] = Math.max(0, v);
-            controller.syncPIDGains();
-            if (isReal()) sendRawCmd(`G${idx} ${controller.gains[name].toPrecision(6)}`);
-          },
-          step: GAIN_STEPS[idx] || Math.max(0.05, 0.1 * controller.gains[name]),
-          gainIdx: idx
-        }))
-      ];
+    function cmdPinca(cmd) {
+      if (cmd === "w") {
+        activeState.pinca_locked = false; // Pinça p/ cima = Cadeado Aberto
+        activeState.pinca_motor = 1;
+      } else if (cmd === "s") {
+        activeState.pinca_locked = true;  // Pinça p/ baixo = Cadeado Travado
+        activeState.pinca_motor = -1;
+      } else if (cmd === "x") {
+        activeState.pinca_motor = 0;
+      }
+      if (isReal()) {
+        sendRawCmd(cmd);
+      } else {
+        // No simulador, simula parada no fim de curso após 0.8 s
+        if (cmd === "w" || cmd === "s") {
+          setTimeout(() => { activeState.pinca_motor = 0; }, 800);
+        }
+      }
     }
 
-    function renderGainsGrid() {
-      const container = document.getElementById("gainsGridContainer");
-      const list = getAdjustableList();
-      container.innerHTML = "";
-      list.forEach((item, idx) => {
-        const div = document.createElement("div");
-        div.className = "gain-item" + (idx === selectedAdjustable ? " selected" : "");
-        div.onclick = () => { selectedAdjustable = idx; renderGainsGrid(); };
-        const tag = item.gainIdx >= 0 ? `G${item.gainIdx}` : "EXT";
-        div.innerHTML = `
-          <label><span>${item.label}</span><span style="color:var(--cyan)">${tag}</span></label>
-          <input type="number" step="any" value="${Number(item.get().toFixed(3))}"
-            onchange="updateAdjustableFromInput(${idx}, parseFloat(this.value))">
-        `;
-        container.appendChild(div);
-      });
+    function startPoliaHold(cmd) {
+      stopPoliaHold(false);
+      poliaHoldDir = (cmd === "a") ? -1 : 1; // a = Abrir (-1), d = Fechar (+1)
+      if (isReal()) {
+        sendRawCmd(cmd);
+        poliaHoldTimer = setInterval(() => {
+          if (isReal()) sendRawCmd(cmd);
+        }, 100); // alimenta o watchdog de 250 ms da polia no STM32
+      }
     }
 
-    function updateAdjustableFromInput(idx, val) {
-      if (isNaN(val)) return;
-      const list = getAdjustableList();
-      selectedAdjustable = idx;
-      list[idx].set(val);
-      renderGainsGrid();
+    function stopPoliaHold(forceStopCmd = false) {
+      const wasMoving = (poliaHoldTimer !== null || poliaHoldDir !== 0);
+      if (poliaHoldTimer !== null) {
+        clearInterval(poliaHoldTimer);
+        poliaHoldTimer = null;
+      }
+      poliaHoldDir = 0;
+      if (isReal() && (wasMoving || forceStopCmd)) {
+        sendRawCmd("c");
+      }
     }
 
-    function pushAllGainsToSTM() {
-      GAIN_NAMES.forEach((name, idx) => {
-        sendRawCmd(`G${idx} ${controller.gains[name].toPrecision(6)}`);
-      });
-      logMsg(`Todos os ${GAIN_NAMES.length} ganhos enviados ao STM32 (G0..G${GAIN_NAMES.length - 1}).`);
+    function zeroPoliaTurns() {
+      activeState.enc_voltas = 0.0;
+      activeState.enc_pct = 0.0;
+      if (isReal()) sendRawCmd("E0");
+      logMsg("Contador da polia zerado (0.00 voltas / 0%).");
+    }
+
+    function applyPoliaMaxTurns() {
+      const v = parseFloat(document.getElementById("inputPoliaMaxTurns").value);
+      if (!isNaN(v) && v >= 0.05 && v <= 500.0) {
+        activeState.enc_voltas_max = v;
+        activeState.enc_pct = Math.min(100.0, Math.max(0.0, (Math.abs(activeState.enc_voltas) / v) * 100.0));
+        if (isReal()) sendRawCmd(`E${v.toFixed(3)}`);
+        logMsg(`Curso de 100% da polia ajustado para ${v.toFixed(1)} voltas.`);
+      }
     }
 
     // Teclado — tabela única em docs/COMANDOS.md (mesmas teclas da Rasp e do twin).
@@ -2065,25 +2432,13 @@
         stepHeading(15.0);
       } else if (k === "0") {
         zeroHeading();
+      } else if (k === "w" || k === "s" || k === "x") {
+        cmdPinca(k);
       } else if (TECLAS_STM_DIRETAS.has(k)) {
+        if (k === "a" || k === "d") heldKeys.add(k);
+        if (k === "c") { heldKeys.delete("a"); heldKeys.delete("d"); stopPoliaHold(false); }
         if (isReal()) sendRawCmd(k);
-        else logMsg(`Tecla '${k}' é comando do STM — sem efeito no simulador.`);
-      } else if (k === "g") {
-        const list = getAdjustableList();
-        selectedAdjustable = (selectedAdjustable + 1) % list.length;
-        renderGainsGrid();
-      } else if (k === "+" || k === "=") {
-        const list = getAdjustableList();
-        const item = list[selectedAdjustable];
-        item.set(item.get() + item.step);
-        renderGainsGrid();
-      } else if (k === "-") {
-        const list = getAdjustableList();
-        const item = list[selectedAdjustable];
-        item.set(Math.max(0.0, item.get() - item.step));
-        renderGainsGrid();
-      } else if (k === "R") {
-        sendRawCmd("R");                        // ler ganhos (mesma letra do STM)
+        else if (k !== "a" && k !== "d" && k !== "c") logMsg(`Tecla '${k}' é comando do STM — sem efeito no simulador.`);
       } else if (k === "r") {
         if (!isReal()) resetSession();
       } else if (k === " ") {
@@ -2625,6 +2980,102 @@
         const pct = Math.max(0, Math.min(100, ((pwm - 1000) / 1000) * 100));
         document.getElementById(ids[i][1]).style.width = `${pct}%`;
       }
+
+      // Polia & Encoder AS5600 (3 estados vetoriais: Abrindo horário, Fechando anti-horário, Parado polia)
+      const encEst = s.enc_estado || 0;
+      const topLbl = document.getElementById("poliaTopLabel");
+      const svgAbr = document.getElementById("svgPoliaAbrindo");
+      const svgFec = document.getElementById("svgPoliaFechando");
+      const svgPar = document.getElementById("svgPoliaParado");
+
+      if (encEst < 0) {
+        topLbl.innerText = "ABRINDO";
+        topLbl.className = "polia-top-label abrindo";
+        svgAbr.style.display = "";
+        svgFec.style.display = "none";
+        svgPar.style.display = "none";
+      } else if (encEst > 0) {
+        topLbl.innerText = "FECHANDO";
+        topLbl.className = "polia-top-label fechando";
+        svgAbr.style.display = "none";
+        svgFec.style.display = "";
+        svgPar.style.display = "none";
+      } else {
+        topLbl.innerText = "PARADO";
+        topLbl.className = "polia-top-label parado";
+        svgAbr.style.display = "none";
+        svgFec.style.display = "none";
+        svgPar.style.display = "";
+      }
+
+      const voltas = isFinite(s.enc_voltas) ? Math.abs(s.enc_voltas) : 0.0;
+      const vmax = isFinite(s.enc_voltas_max) && s.enc_voltas_max > 0 ? s.enc_voltas_max : 45.0;
+      const pctPolia = isFinite(s.enc_pct) ? s.enc_pct : 0.0;
+      const pctClamped = Math.max(0, Math.min(100, pctPolia));
+      document.getElementById("lblPoliaVoltas").innerText = `${voltas.toFixed(1)} / ${vmax.toFixed(0)} v`;
+      document.getElementById("lblPoliaPct").innerText = `${pctPolia.toFixed(1)}%`;
+      document.getElementById("barPoliaPct").style.width = `${pctClamped}%`;
+
+      const badgeEnc = document.getElementById("badgeEncStatus");
+      if (modeSource === "sim") {
+        badgeEnc.innerText = "SIMULADO";
+        badgeEnc.style.color = "var(--cyan)";
+      } else if (s.enc_ok) {
+        badgeEnc.innerText = "AS5600 OK";
+        badgeEnc.style.color = "var(--green)";
+      } else {
+        badgeEnc.innerText = "SEM AS5600";
+        badgeEnc.style.color = "var(--red)";
+      }
+
+      // Ponte H2: Pinça (BTS7960) — Cadeado Travado (Baixo 's') vs Cadeado Aberto (Cima 'w')
+      const svgPincaTrav = document.getElementById("svgPincaTravada");
+      const svgPincaAber = document.getElementById("svgPincaAberta");
+      const pincaTopLbl  = document.getElementById("pincaTopLabel");
+      const pincaBotLbl  = document.getElementById("pincaBottomLabel");
+      const lblPincaEst  = document.getElementById("lblPincaEstado");
+      const lblPincaMot  = document.getElementById("lblPincaMotor");
+      const badgePinca   = document.getElementById("badgePincaLim");
+
+      if (s.pinca_locked) {
+        svgPincaTrav.style.display = "";
+        svgPincaAber.style.display = "none";
+        pincaTopLbl.innerText = "TRAVADA";
+        pincaTopLbl.className = "polia-top-label fechando";
+        pincaBotLbl.innerText = "PINÇA BAIXO";
+        lblPincaEst.innerText = "🔒 Travada (Baixo)";
+        lblPincaEst.style.color = "var(--green)";
+      } else {
+        svgPincaTrav.style.display = "none";
+        svgPincaAber.style.display = "";
+        pincaTopLbl.innerText = "ABERTA";
+        pincaTopLbl.className = "polia-top-label abrindo";
+        pincaBotLbl.innerText = "PINÇA CIMA";
+        lblPincaEst.innerText = "🔓 Aberta (Cima)";
+        lblPincaEst.style.color = "var(--cyan)";
+      }
+
+      if (s.pinca_motor === 1) {
+        lblPincaMot.innerText = "▲ SUBINDO (w)";
+        lblPincaMot.style.color = "var(--cyan)";
+      } else if (s.pinca_motor === -1) {
+        lblPincaMot.innerText = "▼ DESCENDO (s)";
+        lblPincaMot.style.color = "var(--green)";
+      } else {
+        lblPincaMot.innerText = "PARADO (x)";
+        lblPincaMot.style.color = "var(--text-muted)";
+      }
+
+      if (s.pinca_lim_cima) {
+        badgePinca.innerText = "FIM CURSO TOPO";
+        badgePinca.style.color = "var(--cyan)";
+      } else if (s.pinca_lim_baixo) {
+        badgePinca.innerText = "FIM CURSO BASE";
+        badgePinca.style.color = "var(--green)";
+      } else {
+        badgePinca.innerText = "PB14 / PB15";
+        badgePinca.style.color = "var(--text-muted)";
+      }
     }
 
     // Exportação CSV
@@ -2684,7 +3135,6 @@
     }
 
     // Inicialização
-    renderGainsGrid();
     resetSession();
 
     // Se o HTML foi aberto pelo servidor HTTP da Raspberry Pi (bridge.py), conecta direto ao SSE

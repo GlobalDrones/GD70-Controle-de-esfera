@@ -98,10 +98,9 @@ for porta in PORTAS_TENTATIVA:
 if arduino is None:
     print("[AVISO] STM32 não encontrada. O código vai rodar, mas sem telemetria.")
 
-# Ponte TCP: linhas do STM vão ao twin; comandos do twin voltam pela serial
+# Ponte TCP/HTTP: linhas do STM vão ao twin/supervisório; comandos voltam pela serial; stream de vídeo HTTP
 bridge = Bridge(on_client_line=lambda line: send_cmd_serial(line))
-if arduino is not None:
-    bridge.start()
+bridge.start()
 
 
 def send_ang_serial(bearing, D=-1.0):

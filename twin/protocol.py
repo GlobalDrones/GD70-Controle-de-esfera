@@ -68,6 +68,11 @@ class TelemetryFrame:
     tz_cmd: Optional[float] = None
     vhat_x: Optional[float] = None
     vhat_y: Optional[float] = None
+    # Encoder AS5600 da Polia (campos 22..25, opcionais)
+    enc_ok: Optional[int] = None
+    enc_voltas: Optional[float] = None
+    enc_pct: Optional[float] = None
+    enc_estado: Optional[int] = None
 
     @property
     def yaw_on(self) -> bool:
@@ -97,10 +102,15 @@ def parse_line(line: str):
         return None
     if line.startswith("TEL,"):
         parts = line.split(",")
-        if len(parts) not in (16, 21):
+        if len(parts) not in (16, 21, 25):
             return None
         try:
-            extra = [float(p) for p in parts[16:21]] if len(parts) == 21 else [None] * 5
+            extra = [float(p) for p in parts[16:21]] if len(parts) >= 21 else [None] * 5
+            enc = (
+                [int(parts[21]), float(parts[22]), float(parts[23]), int(parts[24])]
+                if len(parts) == 25
+                else [None] * 4
+            )
             return TelemetryFrame(
                 t_ms=float(parts[1]),
                 yaw_deg=float(parts[2]),
@@ -117,6 +127,7 @@ def parse_line(line: str):
                 flags=int(parts[15]),
                 F_cmd_x=extra[0], F_cmd_y=extra[1], tz_cmd=extra[2],
                 vhat_x=extra[3], vhat_y=extra[4],
+                enc_ok=enc[0], enc_voltas=enc[1], enc_pct=enc[2], enc_estado=enc[3],
             )
         except ValueError:
             return None

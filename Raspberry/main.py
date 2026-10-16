@@ -231,16 +231,21 @@ def main():
         now = time.time()
         fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
         t_last = now
-        
-        # Atualiza a janela so a GUI_MAX_FPS e em escala reduzida: sobre VNC,
-        # enviar o frame cheio a cada loop e o que trava o TigerVNC.
+
+        # Desenha HUD com FPS, status e angulo diretamente no frame
+        draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
+
+        # Transmite o quadro via HTTP MJPEG para o navegador do PC (:8080/api/video) e para o futuro APK
+        bridge.update_frame(display)
+
+        # Atualiza a janela local so se GUI_ENABLED for True (dispensavel se visualizar pelo PC/navegador)
         if GUI_ENABLED and (now - t_gui_last) >= gui_period:
             t_gui_last = now
-            draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
+            disp_local = display
             if GUI_SCALE != 1.0:
-                display = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
-                                     interpolation=cv2.INTER_AREA)
-            cv2.imshow("Stereo Profundidade", display)
+                disp_local = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
+                                        interpolation=cv2.INTER_AREA)
+            cv2.imshow("Stereo Profundidade", disp_local)
         
         k = cv2.waitKey(1) & 0xFF
         if k == 255:
