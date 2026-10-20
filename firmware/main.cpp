@@ -132,7 +132,7 @@ const float VISION_LATENCY_S = 0.10f;
 // (no sentido de maior eficiencia da helice, suposto PWM > 1500). +X do corpo = -Y da MPU
 // => o X da MPU esta a +90 graus do X do corpo. CONFIRMAR com o teste de eixos (BRINGUP,
 // Etapa 3): empurrando a esfera a mao para onde o BF empurra, wx tem que ficar POSITIVO.
-const float IMU_MOUNT_DEG = 90.0f;
+const float IMU_MOUNT_DEG = -90.0f;
 const bool  IMU_Z_UP      = true;
 
 // Zona morta de repouso no prumo (Anti-Balanco)
