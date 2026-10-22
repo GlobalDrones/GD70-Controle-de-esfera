@@ -13,6 +13,7 @@ Todos os programas do projeto mandam cada comando terminado em `\n`. Os comandos
 | Comando | Ação | Imediato | Observações |
 |---|---|---|---|
 | `k` (ou `K`) | **PARADA GERAL**: malhas off, ESCs em 1500 µs, polia e pinça paradas, pulso do wizard cancelado | sim | |
+| `F` (ou `f`) | **CORTE DE EMERGÊNCIA**: servo PB3 em 180° por 1000 ms e retorna à posição inicial (0°) | não | soltura mecânica da corda |
 | `w` | pinça sobe | sim | para sozinha no fim de curso |
 | `s` | pinça desce | sim | |
 | `x` | pinça para | sim | |
@@ -45,6 +46,7 @@ Todos os programas do projeto mandam cada comando terminado em `\n`. Os comandos
 | Tecla | Rasp (janela da visão) | Supervisório | Twin / interativo Python |
 |---|---|---|---|
 | `k` | → `k` | → `k` (sempre, também no simulador) | → `k` + para o sim |
+| `F` | → `F` (corte de emergência) | real: → `F` (corte de emergência) | — |
 | `p` | → `p` | sim: liga/desliga XY · real: → `p` | → `p` + sim |
 | `y` | → `y` | sim: heading · real: → `y` | → `y` + sim |
 | `0` | → `0` | sim: ψ = 0 · real: → `0` | — |

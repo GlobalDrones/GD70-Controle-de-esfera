@@ -567,9 +567,14 @@
         <span>2. Malhas & Setpoints (Sim + STM)</span>
       </div>
 
-      <button class="btn btn-danger btn-block" style="padding:7px; font-size:0.80rem;" onclick="sendKillSwitch()">
-        🛑 PARADA GERAL (k)
-      </button>
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
+        <button class="btn btn-danger" style="padding:7px; font-size:0.80rem;" onclick="sendKillSwitch()">
+          🛑 PARADA GERAL (k)
+        </button>
+        <button class="btn btn-danger" style="padding:7px; font-size:0.80rem; background: linear-gradient(135deg, #dc2626, #991b1b);" onclick="sendCorteEmergencia()">
+          ✂️ CORTE CORDA (F)
+        </button>
+      </div>
 
       <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
         <button class="btn btn-success" id="btnToggleXY" onclick="toggleXYLoop()">
@@ -645,7 +650,7 @@
       <!-- Atalhos de Teclado (interactive.py) -->
       <div class="help-box">
         <strong>TECLADO (igual à Rasp e ao twin — docs/COMANDOS.md):</strong><br>
-        Letra do STM = tecla: <b>k</b> parada · <b>p</b> anti-balanço · <b>y</b> heading · <b>0</b> zera ψ<br>
+        Letra do STM = tecla: <b>k</b> parada · <b>F</b> corte emergência · <b>p</b> anti-balanço · <b>y</b> heading · <b>0</b> zera ψ<br>
         <b>z</b> calib MPU · <b>t</b> medir L · <b>w/s/x</b> pinça (abrir/travar) · <b>a/d/c</b> polia (abrir/fechar)<br>
         <b>[ ]</b> ψ_des −15°/+15° · Só simulador: setas força · <b>, .</b> torque · <b>r</b> reset · <b>espaço</b> pausa
       </div>
@@ -2231,6 +2236,12 @@
       logMsg("🛑 PARADA GERAL (k): malhas desligadas e motores em 1500 µs.");
     }
 
+    function sendCorteEmergencia() {
+      // Corte de emergência aciona o servo no PB3 do STM para soltar a corda
+      sendRawCmd("F");
+      logMsg("✂️ CORTE DE EMERGÊNCIA (F): servo PB3 em 180° por 1s (soltando corda).");
+    }
+
     function stepHeading(deltaDeg) {
       if (isReal()) { sendRawCmd(deltaDeg.toFixed(3)); return; }   // degrau relativo no STM
       const newDeg = rad2deg(controller._heading_setpoint) + deltaDeg;
@@ -2422,6 +2433,8 @@
         heldKeys.add(k);
       } else if (k === "k" || k === "K") {
         sendKillSwitch();
+      } else if (k === "f" || k === "F") {
+        sendCorteEmergencia();
       } else if (k === "p") {
         toggleXYLoop();
       } else if (k === "y") {

@@ -6,7 +6,7 @@ from pwm_input import iniciar_pwm_control
 
 # Teclas que vao direto ao STM (a tecla e o proprio comando — docs/COMANDOS.md).
 # 'm' (teste de motores, bloqueia ~18 s) fica de fora de proposito: so pelo supervisorio.
-TECLAS_STM = set("wsxadcekypzt0")
+TECLAS_STM = set("wsxadcekypzt0F")
 
 # Controle de transmissao de angulo pela visao (toggle via tecla 'v')
 visao_atualiza_angulo = True

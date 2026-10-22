@@ -60,6 +60,9 @@
 #define AS_PIN PA15  // Motor b (1): AS — Inferior Esquerdo (+120°)
 #define TR_PIN PA1   // Motor c (2): TR — Inferior Direito (-120°, helice/ESC invertido)
 
+// Servo de Corte de Emergencia (Soltura de Corda)
+#define PIN_SERVO_CORTE PB3
+
 // Ponte H1: Polia (BTS7960)
 #define POLIA_EN_R_PIN  PB7
 #define POLIA_EN_L_PIN  PB10
@@ -262,6 +265,31 @@ const unsigned long TELEMETRY_INTERVAL = 40;   // Telemetria: 25 Hz (40 ms)
 // =========================================================================================
 AS5600 encoder;
 Servo esc_a, esc_b, esc_c;
+
+// Servo de Corte de Emergencia (PB3 - Soltura de Corda)
+Servo servo_corte;
+const int SERVO_CORTE_POS_INICIAL    = 0;     // Posicao inicial/travada [graus]
+const int SERVO_CORTE_POS_ACIONADO   = 180;   // Posicao acionada de corte/soltura [graus]
+const unsigned long CORTE_DURACAO_MS = 1000;  // Tempo em 180 deg antes de retornar [ms]
+bool corte_ativo = false;
+unsigned long t_corte_inicio = 0;
+
+void eco(const String &msg);
+
+void acionar_corte_emergencia() {
+  servo_corte.write(SERVO_CORTE_POS_ACIONADO);
+  corte_ativo = true;
+  t_corte_inicio = millis();
+  eco(">> [CORTE]: ACIONADO! Servo PB3 em 180 deg (soltando corda)...");
+}
+
+void atualizar_servo_corte() {
+  if (corte_ativo && (millis() - t_corte_inicio >= CORTE_DURACAO_MS)) {
+    servo_corte.write(SERVO_CORTE_POS_INICIAL);
+    corte_ativo = false;
+    eco(">> [CORTE]: Retornado a posicao inicial (0 deg).");
+  }
+}
 
 // Estado do Sensor MPU6050
 float gyro_bias[3] = {0, 0, 0};     // Offsets do giroscopio [°/s] (eixos da MPU)
@@ -1282,6 +1310,9 @@ void comando_char(char c) {
       }
       break;
     case 'k': case 'K': parada_geral(); break;
+    case 'f': case 'F':
+      acionar_corte_emergencia();
+      break;
     case 'z': case 'Z': {
       // (SC-04) 'z' recusa se houver movimento; 'Z' forca. Malhas sao desligadas antes
       // (FW-09): a calibracao bloqueia ~9 s e os ESCs nao podem ficar no ultimo PWM.
@@ -1588,6 +1619,8 @@ void setup() {
   esc_a.attach(BF_PIN);
   esc_b.attach(AS_PIN);
   esc_c.attach(TR_PIN);
+  servo_corte.attach(PIN_SERVO_CORTE);
+  servo_corte.write(SERVO_CORTE_POS_INICIAL);
   escrever_escs(ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL);
 
   init_motores_padrao();
@@ -1649,6 +1682,7 @@ void setup() {
   Serial.println("  MPU:     z=calibra (recusa movimento) | Z=forca         ");
   Serial.println("  OUTROS:  e=AS5600 | E0=zera voltas | E<v>=100% | t=L    ");
   Serial.println("  LINHAS:  G<i> <v> | R | V<b> <D> [ms] | W.. | M..       ");
+  Serial.println("  CORTE:   F=corte de emergencia (servo PB3 180 deg)      ");
   Serial.println("  PARADA GERAL: k  (tabela completa: docs/COMANDOS.md)    ");
   Serial.println("==========================================================");
 }
@@ -1663,6 +1697,9 @@ void loop() {
   processar_serial(Serial2, bufS2, descartS2);
 
   // Watchdog da Polia (Deadman Switch de 250 ms trazido do YAWBOM)
+  // Retorno automatico do Servo de Corte de Emergencia (100% nao bloqueante)
+  atualizar_servo_corte();
+
   if (polia_em_movimento && (millis() - ultimo_comando_polia_ms > TIMEOUT_POLIA_MS)) {
     pararBTS();
   }
