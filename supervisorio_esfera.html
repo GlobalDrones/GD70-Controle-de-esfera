@@ -1,0 +1,3150 @@
+<!DOCTYPE html>
+<html lang="pt-BR">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Supervisório & Twin GD70 — Esfera v2</title>
+  <style>
+    :root {
+      --bg-primary: #0b0f19;
+      --bg-secondary: #131b2e;
+      --bg-card: #1a233a;
+      --bg-input: #232f4e;
+      --border-color: #2b395d;
+      --text-main: #f1f5f9;
+      --text-muted: #94a3b8;
+      --cyan: #06b6d4;
+      --cyan-glow: rgba(6, 182, 212, 0.25);
+      --green: #10b981;
+      --amber: #f59e0b;
+      --red: #ef4444;
+      --purple: #8b5cf6;
+      --blue: #3b82f6;
+    }
+
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+    }
+
+    html, body {
+      height: 100vh;
+      max-height: 100vh;
+      overflow: hidden;
+      background-color: var(--bg-primary);
+      color: var(--text-main);
+      display: flex;
+      flex-direction: column;
+    }
+
+    ::-webkit-scrollbar { width: 5px; height: 5px; }
+    ::-webkit-scrollbar-track { background: rgba(0, 0, 0, 0.2); }
+    ::-webkit-scrollbar-thumb { background: var(--border-color); border-radius: 3px; }
+    ::-webkit-scrollbar-thumb:hover { background: var(--cyan); }
+
+    /* Top Status Bar (inspirado em interactive.py + header GD70) */
+    header {
+      background-color: var(--bg-secondary);
+      border-bottom: 1px solid var(--border-color);
+      padding: 6px 14px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      height: 46px;
+      flex-shrink: 0;
+    }
+
+    .brand { display: flex; align-items: center; gap: 10px; }
+    .brand-icon {
+      width: 30px; height: 30px; border-radius: 50%;
+      background: linear-gradient(135deg, var(--cyan), var(--blue));
+      display: flex; align-items: center; justify-content: center;
+      font-weight: 900; font-size: 0.82rem; color: #fff;
+      box-shadow: 0 0 10px var(--cyan-glow);
+    }
+    .brand-title h1 { font-size: 0.95rem; font-weight: 700; line-height: 1.1; }
+    .brand-title p { font-size: 0.66rem; color: var(--text-muted); }
+
+    .status-strip {
+      display: flex; align-items: center; gap: 10px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 0.78rem;
+    }
+
+    .badge {
+      display: inline-flex; align-items: center; gap: 5px;
+      padding: 3px 9px; border-radius: 9999px;
+      font-size: 0.72rem; font-weight: 600;
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+    }
+    .badge-dot { width: 7px; height: 7px; border-radius: 50%; }
+    .dot-green { background-color: var(--green); box-shadow: 0 0 8px var(--green); }
+    .dot-red { background-color: var(--red); box-shadow: 0 0 8px var(--red); }
+    .dot-amber { background-color: var(--amber); box-shadow: 0 0 8px var(--amber); }
+
+    /* Main Grid */
+    .dashboard {
+      display: grid;
+      grid-template-columns: 300px 1fr 320px;
+      gap: 8px;
+      padding: 8px;
+      flex: 1;
+      height: calc(100vh - 46px);
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      padding: 9px;
+      display: flex;
+      flex-direction: column;
+      gap: 7px;
+      height: 100%;
+      min-height: 0;
+      overflow-y: auto;
+    }
+
+    .card-title {
+      font-size: 0.74rem;
+      font-weight: 700;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+      color: var(--cyan);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid rgba(255, 255, 255, 0.06);
+      padding-bottom: 3px;
+      margin-top: 2px;
+    }
+
+    .btn {
+      display: inline-flex; align-items: center; justify-content: center;
+      gap: 4px; padding: 5px 8px; font-size: 0.74rem; font-weight: 600;
+      border-radius: 5px; cursor: pointer; transition: all 0.12s ease;
+      background-color: var(--bg-input); color: var(--text-main);
+      border: 1px solid var(--border-color);
+    }
+    .btn:hover { background-color: #2e3d64; }
+    .btn-primary { background: linear-gradient(135deg, var(--cyan), var(--blue)); border: none; color: #fff; }
+    .btn-success { background: linear-gradient(135deg, var(--green), #059669); border: none; color: #fff; }
+    .btn-warning { background: linear-gradient(135deg, var(--amber), #d97706); border: none; color: #000; font-weight: 700; }
+    .btn-danger { background: linear-gradient(135deg, #ef4444, #b91c1c); border: none; color: #fff; font-weight: 700; }
+    .btn-off { background-color: #1e293b !important; color: #94a3b8 !important; border: 1px solid #334155 !important; }
+    .btn-block { width: 100%; }
+
+    .form-group { display: flex; flex-direction: column; gap: 2px; }
+    .form-label {
+      font-size: 0.68rem; color: var(--text-muted); font-weight: 600;
+      display: flex; justify-content: space-between;
+    }
+    .form-control {
+      background-color: var(--bg-input); border: 1px solid var(--border-color);
+      color: var(--text-main); padding: 4px 7px; border-radius: 5px;
+      font-size: 0.74rem; outline: none;
+    }
+    .form-control:focus { border-color: var(--cyan); }
+
+    .tab-nav { display: flex; gap: 3px; border-bottom: 1px solid var(--border-color); padding-bottom: 4px; }
+    .tab-btn {
+      flex: 1; padding: 4px 4px; font-size: 0.68rem; font-weight: 600;
+      border-radius: 4px; background: transparent; border: none;
+      color: var(--text-muted); cursor: pointer;
+    }
+    .tab-btn.active { background-color: var(--bg-card); color: var(--cyan); border: 1px solid var(--border-color); }
+
+    /* Center Viewport: Left (3D + XY Radar) | Right (4 Charts from interactive.py) */
+    .center-viewport-layout {
+      display: grid;
+      grid-template-columns: 1.15fr 1fr;
+      gap: 8px;
+      height: 100%;
+      min-height: 0;
+      overflow: hidden;
+    }
+
+    .left-visual-col {
+      display: grid;
+      grid-template-rows: 1.65fr 1fr;
+      gap: 8px;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .canvas-container {
+      position: relative;
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .canvas-header {
+      padding: 5px 10px;
+      background-color: rgba(19, 27, 46, 0.95);
+      border-bottom: 1px solid var(--border-color);
+      font-size: 0.72rem;
+      font-weight: 700;
+      color: var(--text-main);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-shrink: 0;
+    }
+
+    .canvas-body {
+      flex: 1;
+      width: 100%;
+      height: 100%;
+      min-height: 0;
+      display: block;
+      background: radial-gradient(circle at 50% 35%, #111827 0%, #060913 100%);
+    }
+
+    #canvas3D { cursor: grab; }
+    #canvas3D:active { cursor: grabbing; }
+
+    /* HUD Overlay on 3D Canvas (exact style of interactive.py) */
+    .hud-overlay {
+      position: absolute;
+      top: 34px;
+      left: 10px;
+      background: rgba(11, 15, 25, 0.82);
+      border: 1px solid rgba(6, 182, 212, 0.35);
+      border-radius: 6px;
+      padding: 6px 9px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 0.72rem;
+      line-height: 1.42;
+      color: #e2e8f0;
+      pointer-events: none;
+      white-space: pre;
+      z-index: 12;
+    }
+
+    .viewport-controls-overlay {
+      position: absolute;
+      bottom: 8px;
+      right: 8px;
+      display: flex;
+      gap: 4px;
+      z-index: 15;
+    }
+
+    .ctrl-btn {
+      background-color: rgba(26, 35, 58, 0.85);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      padding: 3px 6px;
+      font-size: 0.66rem;
+      font-weight: 600;
+      border-radius: 4px;
+      cursor: pointer;
+    }
+    .ctrl-btn:hover { background-color: var(--cyan); color: #000; }
+
+    .charts-column {
+      display: grid;
+      grid-template-rows: repeat(4, 1fr);
+      gap: 7px;
+      height: 100%;
+      min-height: 0;
+    }
+
+    .chart-card {
+      background-color: var(--bg-secondary);
+      border: 1px solid var(--border-color);
+      border-radius: 8px;
+      overflow: hidden;
+      display: flex;
+      flex-direction: column;
+      min-height: 0;
+    }
+
+    .chart-card canvas {
+      display: block;
+      width: 100%;
+      flex: 1;
+      min-height: 0;
+      background-color: #080c16;
+    }
+
+    /* KPI & Gains */
+    .kpi-grid {
+      display: grid;
+      grid-template-columns: repeat(2, 1fr);
+      gap: 5px;
+    }
+    .kpi-box {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 5px;
+      padding: 5px 7px;
+      display: flex;
+      flex-direction: column;
+    }
+    .kpi-label { font-size: 0.62rem; color: var(--text-muted); text-transform: uppercase; font-weight: 600; }
+    .kpi-value { font-size: 0.95rem; font-weight: 700; font-variant-numeric: tabular-nums; }
+    .kpi-unit { font-size: 0.65rem; font-weight: normal; color: var(--text-muted); margin-left: 2px; }
+
+    .gains-grid {
+      display: grid;
+      grid-template-columns: 1fr 1fr;
+      gap: 5px;
+    }
+    .gain-item {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 5px;
+      padding: 4px 6px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+    .gain-item.selected {
+      border-color: var(--cyan);
+      box-shadow: 0 0 6px var(--cyan-glow);
+    }
+    .gain-item label {
+      font-size: 0.63rem;
+      color: var(--text-muted);
+      font-family: "Consolas", monospace;
+      display: flex;
+      justify-content: space-between;
+    }
+    .gain-item input {
+      width: 100%;
+      background: var(--bg-input);
+      border: 1px solid var(--border-color);
+      color: var(--text-main);
+      font-size: 0.72rem;
+      padding: 2px 4px;
+      border-radius: 3px;
+      font-family: "Consolas", monospace;
+    }
+
+    .motor-bar-container { display: flex; flex-direction: column; gap: 5px; }
+    .motor-bar-item { display: flex; flex-direction: column; gap: 2px; }
+    .motor-bar-label { display: flex; justify-content: space-between; font-size: 0.68rem; font-weight: 600; }
+    .progress-bar-bg {
+      height: 8px; background-color: var(--bg-input);
+      border-radius: 4px; overflow: hidden; position: relative;
+    }
+    .progress-bar-fill { height: 100%; border-radius: 4px; transition: width 0.05s linear; }
+    .bar-a { background-color: #ef4444; }
+    .bar-b { background-color: #10b981; }
+    .bar-c { background-color: #3b82f6; }
+    .neutral-marker {
+      position: absolute; left: 50%; top: 0; bottom: 0;
+      width: 2px; background-color: rgba(255, 255, 255, 0.45); z-index: 2;
+    }
+
+    .terminal {
+      background-color: #05070d;
+      border: 1px solid var(--border-color);
+      border-radius: 6px;
+      padding: 6px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 0.66rem;
+      color: #38bdf8;
+      height: 82px;
+      overflow-y: auto;
+      white-space: pre-wrap;
+    }
+
+    .help-box {
+      background: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 5px;
+      padding: 6px;
+      font-family: "Consolas", "Courier New", monospace;
+      font-size: 0.65rem;
+      line-height: 1.4;
+      color: var(--text-muted);
+    }
+    .help-box strong { color: var(--cyan); }
+
+    /* Card Visual da Polia (AS5600) e Pinça (Ponte H2 - Cadeado) */
+    .polia-card {
+      background-color: var(--bg-card);
+      border: 1px solid var(--border-color);
+      border-radius: 7px;
+      padding: 8px 10px;
+      display: grid;
+      grid-template-columns: 106px 1fr;
+      gap: 10px;
+      align-items: center;
+    }
+    .polia-visual-box {
+      background: linear-gradient(180deg, #0b1120 0%, #070a12 100%);
+      border: 1px solid var(--border-color);
+      border-radius: 7px;
+      padding: 5px 4px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      justify-content: space-between;
+      min-height: 108px;
+      user-select: none;
+      box-shadow: inset 0 1px 0 rgba(255,255,255,0.04);
+    }
+    .polia-top-label {
+      font-size: 0.68rem;
+      font-weight: 800;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-align: center;
+    }
+    .polia-top-label.parado   { color: var(--amber); }
+    .polia-top-label.abrindo  { color: var(--cyan); }
+    .polia-top-label.fechando { color: var(--green); }
+    .polia-bottom-label {
+      font-size: 0.64rem;
+      font-weight: 700;
+      color: var(--text-muted);
+      letter-spacing: 0.06em;
+      text-transform: uppercase;
+      text-align: center;
+    }
+    .polia-info-col {
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      min-width: 0;
+    }
+    .polia-stat-row {
+      display: flex;
+      justify-content: space-between;
+      align-items: baseline;
+      font-size: 0.72rem;
+    }
+    @keyframes spinCW {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(360deg); }
+    }
+    @keyframes spinCCW {
+      from { transform: rotate(0deg); }
+      to   { transform: rotate(-360deg); }
+    }
+    .polia-wheel-cw {
+      transform-origin: 50px 50px;
+      animation: spinCW 2.4s linear infinite;
+    }
+    .polia-wheel-ccw {
+      transform-origin: 50px 50px;
+      animation: spinCCW 2.4s linear infinite;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Barra de Status Superior (interactive.py + twin/window.py) -->
+  <header>
+    <div class="brand">
+      <div class="brand-icon">GD</div>
+      <div class="brand-title">
+        <h1>ESFERA v2 • SUPERVISÓRIO & DIGITAL TWIN</h1>
+        <p>Paridade Física RATTLE + Atuadores por Motor + Protocolo TEL v2 (25 Hz)</p>
+      </div>
+    </div>
+
+    <div class="status-strip">
+      <span id="statusTime">t = 0.00 s</span>
+      <span id="statusXY" style="color:var(--green); font-weight:700;">XY: LIGADO</span>
+      <span id="statusHead" style="color:var(--green); font-weight:700;">HEADING: LIGADO</span>
+      <span id="statusVision" style="color:var(--text-muted);">VISÃO: OFF</span>
+      <span id="statusPause" style="color:var(--amber); font-weight:700;"></span>
+    </div>
+
+    <div class="header-actions" style="display:flex; gap:6px; align-items:center;">
+      <div class="badge">
+        <span class="badge-dot dot-amber" id="statusDot"></span>
+        <span id="statusText">Simulador v2 Ativo</span>
+      </div>
+      <div class="badge"><span>FPS:</span> <strong id="fpsLabel">60</strong></div>
+      <div class="badge"><span>TEL:</span> <strong id="hzLabel">25 Hz</strong></div>
+    </div>
+  </header>
+
+  <div class="dashboard">
+
+    <!-- =================================================================
+         COLUNA ESQUERDA: FONTE DE DADOS, CENÁRIOS, MALHA E MECANISMOS
+         ================================================================= -->
+    <div class="card">
+      <div class="card-title">
+        <span>1. Fonte de Dados (Real vs Sim)</span>
+        <span id="activeSourceBadge" style="font-size:0.64rem; color:var(--amber);">SIMULADOR</span>
+      </div>
+
+      <div class="tab-nav">
+        <button class="tab-btn active" id="tabSimBtn" onclick="switchTab('sim')">Simulador v2</button>
+        <button class="tab-btn" id="tabRaspBtn" onclick="switchTab('rasp')">Rasp (HTTP/SSE)</button>
+        <button class="tab-btn" id="tabSerialBtn" onclick="switchTab('serial')">Serial USB</button>
+        <button class="tab-btn" id="tabWsBtn" onclick="switchTab('ws')">WebSocket</button>
+      </div>
+
+      <!-- Aba 1: Simulador Local (esfera v2) -->
+      <div id="tabSimContent" style="display:flex; flex-direction:column; gap:5px;">
+        <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
+          <div class="form-group">
+            <label class="form-label">Cenário (scenarios.py):</label>
+            <select id="scenarioSelect" class="form-control" onchange="changeScenario(this.value)">
+              <option value="default" selected>default (15°, vy=0.3)</option>
+              <option value="disturbance">disturbance (20°/-10°)</option>
+              <option value="heading">heading (90°,-45°,180°)</option>
+              <option value="gust">gust (rajadas 10N / -8N)</option>
+            </select>
+          </div>
+          <div class="form-group">
+            <label class="form-label">Planta (simulation.py):</label>
+            <select id="plantSelect" class="form-control" onchange="changePlantType(this.value)">
+              <option value="nonlinear" selected>Não-Linear (RATTLE)</option>
+              <option value="linear">Linearizada</option>
+            </select>
+          </div>
+        </div>
+
+        <div style="display:flex; gap:5px;">
+          <button class="btn btn-warning btn-block" id="btnSimPause" onclick="togglePause()">⏸ Pausar (espaço)</button>
+          <button class="btn btn-primary btn-block" onclick="resetSession()">↺ Reset (R)</button>
+        </div>
+
+        <div style="display:flex; gap:5px; align-items:center;">
+          <label class="btn btn-block" style="cursor:pointer; margin:0;">
+            📂 Carregar calib.json (Wizard)
+            <input type="file" accept=".json" style="display:none;" onchange="loadCalibJson(event)">
+          </label>
+        </div>
+      </div>
+
+      <!-- Aba 2: Ponte Raspberry Pi (bridge.py HTTP/SSE porta 8080) -->
+      <div id="tabRaspContent" style="display:none; flex-direction:column; gap:5px;">
+        <p style="font-size:0.68rem; color:var(--text-muted);">
+          Conecta ao <code>bridge.py</code> na Raspberry Pi (SSE <code>/api/stream</code> + <code>/api/cmd</code>). Exibe apenas a Telemetria Real.
+        </p>
+        <div class="form-group">
+          <label class="form-label">Endereço HTTP da Raspberry Pi:</label>
+          <input type="text" id="raspUrlInput" class="form-control" value="http://192.168.0.50:8080">
+        </div>
+        <button class="btn btn-primary btn-block" id="btnConnectRasp" onclick="toggleRaspConnection()">
+          📡 Conectar à Raspberry Pi
+        </button>
+      </div>
+
+      <!-- Aba 3: Web Serial API (STM32 direto no USB do PC) -->
+      <div id="tabSerialContent" style="display:none; flex-direction:column; gap:5px;">
+        <p style="font-size:0.68rem; color:var(--text-muted);">
+          Conecta direto à STM32 Black Pill via USB (115200 bps, protocolo TEL v2). Exibe apenas a Telemetria Real.
+        </p>
+        <button class="btn btn-primary btn-block" id="btnConnectSerial" onclick="toggleSerialConnection()">
+          🔌 Conectar Porta Serial USB
+        </button>
+      </div>
+
+      <!-- Aba 4: WebSocket -->
+      <div id="tabWsContent" style="display:none; flex-direction:column; gap:5px;">
+        <div class="form-group">
+          <label class="form-label">URL WebSocket:</label>
+          <input type="text" id="wsUrlInput" class="form-control" value="ws://localhost:8765">
+        </div>
+        <button class="btn btn-primary btn-block" id="btnConnectWs" onclick="toggleWsConnection()">
+          🌐 Conectar WebSocket
+        </button>
+      </div>
+
+      <!-- 2. CONTROLE DE MALHA E PARÂMETROS DA SESSÃO -->
+      <div class="card-title">
+        <span>2. Malhas & Setpoints (Sim + STM)</span>
+      </div>
+
+      <button class="btn btn-danger btn-block" style="padding:7px; font-size:0.80rem;" onclick="sendKillSwitch()">
+        🛑 PARADA GERAL (k)
+      </button>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
+        <button class="btn btn-success" id="btnToggleXY" onclick="toggleXYLoop()">
+          🛡️ ANTI-BALANÇO (p): ON
+        </button>
+        <button class="btn btn-primary" id="btnToggleHead" onclick="toggleHeadingLoop()">
+          🧭 HEADING (y): ON
+        </button>
+      </div>
+
+      <div class="form-group">
+        <label class="form-label">
+          <span>Heading Desejado (ψ_des):</span>
+          <span id="lblYawDes" style="color:var(--cyan); font-weight:700;">0.0°</span>
+        </label>
+        <div style="display:flex; gap:4px;">
+          <button class="btn" onclick="stepHeading(-15)">-15° ([)</button>
+          <input type="range" id="sliderYawDes" min="-180" max="180" step="1" value="0" class="form-control" style="flex:1; padding:0;" oninput="setHeadingAbsolute(parseFloat(this.value))">
+          <button class="btn" onclick="stepHeading(15)">+15° (])</button>
+          <button class="btn" onclick="zeroHeading()">0° (0)</button>
+        </div>
+      </div>
+
+      <div style="display:grid; grid-template-columns: 1fr 1fr; gap:5px;">
+        <div class="form-group">
+          <label class="form-label">Cabo L (0.5–6.0 m):</label>
+          <div style="display:flex; gap:3px;">
+            <input type="number" id="inputLengthL" class="form-control" value="5.0" min="0.5" max="6.0" step="0.1" style="width:100%;">
+            <button class="btn btn-primary" onclick="applyLengthL()">L</button>
+          </div>
+        </div>
+        <div class="form-group">
+          <label class="form-label">Inércia Iz (kg·m²):</label>
+          <div style="display:flex; gap:3px;">
+            <input type="number" id="inputInertia" class="form-control" value="1.728" min="0.1" max="10.0" step="0.05" style="width:100%;">
+            <button class="btn btn-primary" onclick="applyInertia()">Iz</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Injeção de Visão Computacional (Contrato V<bearing> <D>) -->
+      <div class="card-title">
+        <span>3. Contrato da Visão (V&lt;bearing&gt; &lt;D&gt;)</span>
+      </div>
+      <div style="display:grid; grid-template-columns: 1fr 1fr auto; gap:4px; align-items:end;">
+        <div class="form-group">
+          <label class="form-label">Bearing (°):</label>
+          <input type="number" id="inputVisBearing" class="form-control" value="0.0" min="-90" max="90" step="1">
+        </div>
+        <div class="form-group">
+          <label class="form-label">Dist. D (m):</label>
+          <input type="number" id="inputVisD" class="form-control" value="1.20" min="-1" max="5" step="0.1">
+        </div>
+        <button class="btn btn-primary" onclick="sendVisionPacket()">Enviar V</button>
+      </div>
+
+      <!-- Comandos de Bancada / Mecanismos STM32 -->
+      <div class="card-title">
+        <span>4. Bancada & Mecanismos STM32</span>
+      </div>
+      <div style="display:grid; grid-template-columns: repeat(3, 1fr); gap:4px;">
+        <button class="btn" onclick="cmdPinca('w')">🔓 Pinça Cima (w)</button>
+        <button class="btn" onclick="cmdPinca('s')">🔒 Pinça Baixo (s)</button>
+        <button class="btn" onclick="cmdPinca('x')">■ Parar Pinça (x)</button>
+        <button class="btn" onmousedown="startPoliaHold('a')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()" ontouchstart="startPoliaHold('a'); event.preventDefault();" ontouchend="stopPoliaHold()">↻ Abrir (a)</button>
+        <button class="btn" onmousedown="startPoliaHold('d')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()" ontouchstart="startPoliaHold('d'); event.preventDefault();" ontouchend="stopPoliaHold()">↺ Fechar (d)</button>
+        <button class="btn" onclick="stopPoliaHold(true)">■ Parar Polia (c)</button>
+        <button class="btn" onclick="sendRawCmd('z')">Calib MPU (z)</button>
+        <button class="btn" onclick="sendRawCmd('t')">Medir L (t)</button>
+        <button class="btn" onclick="confirmMotorTest()">Teste Mot (m)</button>
+      </div>
+
+      <!-- Atalhos de Teclado (interactive.py) -->
+      <div class="help-box">
+        <strong>TECLADO (igual à Rasp e ao twin — docs/COMANDOS.md):</strong><br>
+        Letra do STM = tecla: <b>k</b> parada · <b>p</b> anti-balanço · <b>y</b> heading · <b>0</b> zera ψ<br>
+        <b>z</b> calib MPU · <b>t</b> medir L · <b>w/s/x</b> pinça (abrir/travar) · <b>a/d/c</b> polia (abrir/fechar)<br>
+        <b>[ ]</b> ψ_des −15°/+15° · Só simulador: setas força · <b>, .</b> torque · <b>r</b> reset · <b>espaço</b> pausa
+      </div>
+    </div>
+
+    <!-- =================================================================
+         COLUNA CENTRAL: ESQUERDA (3D + XY/YAW) | DIREITA (4 GRÁFICOS)
+         ================================================================= -->
+    <div class="center-viewport-layout">
+
+      <!-- Esquerda: Cena 3D + Gráfico Planar XY e Yaw -->
+      <div class="left-visual-col">
+        <div class="canvas-container">
+          <div class="canvas-header">
+            <span>CENA 3D • ESFERA, EMPUXOS E LINHA DE TRANSMISSÃO (arraste p/ girar)</span>
+            <span id="lblMode3D" style="font-size:0.66rem; color:var(--cyan);">RATTLE 200 Hz</span>
+          </div>
+          <canvas id="canvas3D" class="canvas-body"></canvas>
+          <div class="hud-overlay" id="hud3D">Carregando...</div>
+          <div class="viewport-controls-overlay">
+            <button class="ctrl-btn" onclick="resetCamera()">↺ Vista Padrão</button>
+            <button class="ctrl-btn" onclick="adjustZoom(1.15)">🔍 +</button>
+            <button class="ctrl-btn" onclick="adjustZoom(0.85)">🔍 -</button>
+          </div>
+        </div>
+
+        <!-- Aba Visual Dupla: Gráfico XY / Radar e Câmera ao Vivo da Raspberry Pi -->
+        <div class="canvas-container" id="containerBottomVisual">
+          <div class="canvas-header" style="justify-content: space-between;">
+            <div style="display:flex; gap:6px; align-items:center;">
+              <button class="btn btn-primary" id="btnTabRadar" style="padding:2px 7px; font-size:0.64rem;" onclick="switchVisualTab('radar')">📊 Gráfico XY / Radar</button>
+              <button class="btn" id="btnTabCamera" style="padding:2px 7px; font-size:0.64rem;" onclick="switchVisualTab('camera')">📷 Câmera ao Vivo (Raspberry)</button>
+            </div>
+            <div style="display:flex; gap:4px; align-items:center;">
+              <span id="badgeCameraStatus" style="font-size:0.62rem; color:var(--text-muted); display:none;">⚪ OFFLINE</span>
+              <button class="btn" id="btnPopoutCamera" style="padding:1px 6px; font-size:0.62rem; display:none;" onclick="openCameraPopout()" title="Abrir stream de vídeo em janela separada">🔗 Janela</button>
+            </div>
+          </div>
+          <canvas id="canvasXY" class="canvas-body"></canvas>
+          <div id="cameraFeedWrapper" style="display:none; flex:1; width:100%; height:100%; min-height:0; background:#04060b; position:relative; align-items:center; justify-content:center; overflow:hidden;">
+            <img id="cameraStreamImg" src="" alt="Stream Câmera" style="width:100%; height:100%; object-fit:contain; display:none;">
+            <div id="cameraPlaceholder" style="display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.75rem; padding:15px; text-align:center;">
+              <div style="font-size:2rem; margin-bottom:6px;">📷</div>
+              <strong style="color:var(--cyan); margin-bottom:4px;">CÂMERA DA RASPBERRY PI 5 (SEM VNC)</strong>
+              <span>Conecte na aba <b>Rasp (HTTP/SSE)</b> para iniciar o streaming de vídeo ao vivo.</span>
+              <span style="font-size:0.66rem; margin-top:6px; color:#64748b;">Endpoint HTTP: <code>/api/video</code> (MJPEG acelerado)</span>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Direita: 4 Gráficos Temporais de interactive.py / twin/window.py -->
+      <div class="charts-column">
+        <div class="chart-card">
+          <div class="canvas-header">
+            <span>1. INCLINAÇÃO DA CORDA — θx, θy (°)</span>
+            <span style="font-size:0.65rem;">
+              <span style="color:#38bdf8">■ θx (sx)</span> &nbsp;
+              <span style="color:#10b981">■ θy (sy)</span>
+            </span>
+          </div>
+          <canvas id="chartTilt"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="canvas-header">
+            <span>2. VELOCIDADE NO MUNDO — vx, vy (m/s)</span>
+            <span style="font-size:0.65rem;">
+              <span style="color:#38bdf8">■ vx</span> &nbsp;
+              <span style="color:#f59e0b">■ vy</span>
+            </span>
+          </div>
+          <canvas id="chartVel"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="canvas-header">
+            <span>3. HEADING — ψ REAL vs DESEJADO (°)</span>
+            <span style="font-size:0.65rem;">
+              <span style="color:#06b6d4">■ ψ</span> &nbsp;
+              <span style="color:#ffffff">- - ψ_des</span>
+            </span>
+          </div>
+          <canvas id="chartHeading"></canvas>
+        </div>
+
+        <div class="chart-card">
+          <div class="canvas-header">
+            <span>4. PWM DOS ESCs — a (BF), b (AS), c (TR) (µs)</span>
+            <span style="font-size:0.65rem;">
+              <span style="color:#ef4444">■ a (BF)</span> &nbsp;
+              <span style="color:#10b981">■ b (AS)</span> &nbsp;
+              <span style="color:#3b82f6">■ c (TR)</span>
+            </span>
+          </div>
+          <canvas id="chartPWM"></canvas>
+        </div>
+      </div>
+
+    </div>
+
+    <!-- =================================================================
+         COLUNA DIREITA: TELEMETRIA, POLIA AS5600, MOTORES, GANHOS
+         ================================================================= -->
+    <div class="card">
+      <div class="card-title">
+        <span>Telemetria Instantânea (TEL v2)</span>
+        <button class="btn" style="padding:1px 6px; font-size:0.62rem;" onclick="exportCSV()">💾 CSV</button>
+      </div>
+
+      <div class="kpi-grid">
+        <div class="kpi-box">
+          <span class="kpi-label">Inclinação |θ|</span>
+          <div class="kpi-value" style="color:var(--amber);"><span id="kpiTiltMag">0.00</span><span class="kpi-unit">°</span></div>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Velocidade |v|</span>
+          <div class="kpi-value"><span id="kpiSpeed">0.000</span><span class="kpi-unit">m/s</span></div>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Heading ψ / Des</span>
+          <div class="kpi-value" style="color:var(--cyan);"><span id="kpiYaw">0.0</span><span class="kpi-unit">°</span></div>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Taxa Yaw (rate_z)</span>
+          <div class="kpi-value"><span id="kpiRateZ">0.0</span><span class="kpi-unit">°/s</span></div>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">θx (sx) / θy (sy)</span>
+          <div class="kpi-value" style="font-size:0.84rem;"><span id="kpiSxSy">0.00° / 0.00°</span></div>
+        </div>
+        <div class="kpi-box">
+          <span class="kpi-label">Cabo L / Dist. D</span>
+          <div class="kpi-value" style="font-size:0.84rem;"><span id="kpiLD">5.00m / —</span></div>
+        </div>
+      </div>
+
+      <!-- Widget Visual da Polia & Fixação da Espera (Encoder AS5600) -->
+      <div class="card-title">
+        <span>Ponte H1: Polia & Espera (AS5600)</span>
+        <span id="badgeEncStatus" style="font-size:0.62rem; color:var(--green);">AS5600 PRONTO</span>
+      </div>
+
+      <div class="polia-card">
+        <!-- Ícone Vetorial Profissional dos 3 Estados: Parado (Polia), Fechando (Anti-Horário), Abrindo (Horário) -->
+        <div class="polia-visual-box">
+          <div class="polia-top-label parado" id="poliaTopLabel">PARADO</div>
+
+          <svg id="poliaSvg" width="66" height="66" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <radialGradient id="pulleyGrad" cx="50%" cy="50%" r="50%">
+                <stop offset="0%" stop-color="#334155"/>
+                <stop offset="70%" stop-color="#1e293b"/>
+                <stop offset="100%" stop-color="#0f172a"/>
+              </radialGradient>
+            </defs>
+
+            <!-- 1. PARADO: Ícone vetorial técnico de uma Polia Mecânica -->
+            <g id="svgPoliaParado">
+              <!-- Cabos tangentes da polia -->
+              <line x1="20" y1="50" x2="20" y2="92" stroke="#64748b" stroke-width="2.5" stroke-dasharray="3 2"/>
+              <line x1="80" y1="50" x2="80" y2="92" stroke="#64748b" stroke-width="2.5" stroke-dasharray="3 2"/>
+              <!-- Suporte superior / olhal da polia -->
+              <path d="M 43 18 V 11 C 43 7, 57 7, 57 11 V 18" stroke="#94a3b8" stroke-width="2.8" fill="none"/>
+              <!-- Roda da Polia com canaleta -->
+              <circle cx="50" cy="50" r="32" fill="url(#pulleyGrad)" stroke="#f59e0b" stroke-width="3.2"/>
+              <circle cx="50" cy="50" r="26.5" stroke="#94a3b8" stroke-width="1.4" stroke-dasharray="5 3"/>
+              <!-- 6 Furos de alívio da polia -->
+              <circle cx="50" cy="32" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="65.6" cy="41" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="65.6" cy="59" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="50" cy="68" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="34.4" cy="59" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <circle cx="34.4" cy="41" r="3.6" fill="#090d16" stroke="#64748b" stroke-width="1.3"/>
+              <!-- Cubo central e eixo -->
+              <circle cx="50" cy="50" r="10.5" fill="#1e293b" stroke="#f59e0b" stroke-width="2.2"/>
+              <circle cx="50" cy="50" r="4.2" fill="#090d16" stroke="#cbd5e1" stroke-width="1.5"/>
+            </g>
+
+            <!-- 2. FECHANDO (d): Polia girando em sentido ANTI-HORÁRIO (CCW) + Setas Vetoriais CCW -->
+            <g id="svgPoliaFechando" style="display:none;">
+              <g class="polia-wheel-ccw">
+                <circle cx="50" cy="50" r="24" fill="url(#pulleyGrad)" stroke="#10b981" stroke-width="2.6"/>
+                <circle cx="50" cy="50" r="19.5" stroke="#6ee7b7" stroke-width="1.1" stroke-dasharray="4 3"/>
+                <circle cx="50" cy="36.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="63.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="50" r="8" fill="#1e293b" stroke="#10b981" stroke-width="2"/>
+                <circle cx="50" cy="50" r="3.2" fill="#090d16"/>
+              </g>
+              <!-- Arcos externos com setas em sentido ANTI-HORÁRIO (CCW: Topo -> Esquerda -> Base -> Direita) -->
+              <path d="M 77 21 A 39 39 0 0 0 13 38" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="7,27 13,40 24,33" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <path d="M 23 79 A 39 39 0 0 0 87 62" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="93,73 87,60 76,67" stroke="#10b981" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </g>
+
+            <!-- 3. ABRINDO (a): Polia girando em sentido HORÁRIO (CW) + Setas Vetoriais CW -->
+            <g id="svgPoliaAbrindo" style="display:none;">
+              <g class="polia-wheel-cw">
+                <circle cx="50" cy="50" r="24" fill="url(#pulleyGrad)" stroke="#38bdf8" stroke-width="2.6"/>
+                <circle cx="50" cy="50" r="19.5" stroke="#7dd3fc" stroke-width="1.1" stroke-dasharray="4 3"/>
+                <circle cx="50" cy="36.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="61.7" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="63.5" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="56.8" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="38.3" cy="43.2" r="2.8" fill="#090d16" stroke="#94a3b8" stroke-width="1.1"/>
+                <circle cx="50" cy="50" r="8" fill="#1e293b" stroke="#38bdf8" stroke-width="2"/>
+                <circle cx="50" cy="50" r="3.2" fill="#090d16"/>
+              </g>
+              <!-- Arcos externos com setas em sentido HORÁRIO (CW: Topo -> Direita -> Base -> Esquerda) -->
+              <path d="M 23 21 A 39 39 0 0 1 87 38" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="93,27 87,40 76,33" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+              <path d="M 77 79 A 39 39 0 0 1 13 62" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" fill="none"/>
+              <polyline points="7,73 13,60 24,67" stroke="#38bdf8" stroke-width="4.2" stroke-linecap="round" stroke-linejoin="round" fill="none"/>
+            </g>
+          </svg>
+
+          <div class="polia-bottom-label">POLIA (140v)</div>
+        </div>
+
+        <!-- Dados de Voltas, Porcentagem (base 140 voltas) e Controles -->
+        <div class="polia-info-col">
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Voltas (de 140v):</span>
+            <strong id="lblPoliaVoltas" style="font-size:0.92rem; color:var(--text-main); font-family:Consolas,monospace;">0.00 / 140 v</strong>
+          </div>
+
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Fechamento:</span>
+            <strong id="lblPoliaPct" style="font-size:0.92rem; color:var(--cyan); font-family:Consolas,monospace;">0.0%</strong>
+          </div>
+
+          <div class="progress-bar-bg" style="height:9px;">
+            <div class="progress-bar-fill" id="barPoliaPct" style="width:0%; background:linear-gradient(90deg, var(--cyan), var(--green));"></div>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr 1fr; gap:4px; margin-top:3px;">
+            <button class="btn" style="padding:3px 4px; font-size:0.64rem;"
+                    onmousedown="startPoliaHold('a')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()"
+                    ontouchstart="startPoliaHold('a'); event.preventDefault();" ontouchend="stopPoliaHold()">
+              ↻ Abrir (a)
+            </button>
+            <button class="btn btn-success" style="padding:3px 4px; font-size:0.64rem;"
+                    onmousedown="startPoliaHold('d')" onmouseup="stopPoliaHold()" onmouseleave="stopPoliaHold()"
+                    ontouchstart="startPoliaHold('d'); event.preventDefault();" ontouchend="stopPoliaHold()">
+              ↺ Fechar (d)
+            </button>
+            <button class="btn" style="padding:3px 4px; font-size:0.64rem;" onclick="stopPoliaHold(true)">
+              ■ Parar (c)
+            </button>
+          </div>
+
+          <div style="display:flex; gap:4px; align-items:center; margin-top:2px;">
+            <button class="btn" style="padding:2px 6px; font-size:0.62rem;" onclick="zeroPoliaTurns()" title="Zera o contador de voltas na posição atual (comando E0)">
+              ⟲ Zerar (0v)
+            </button>
+            <span style="font-size:0.61rem; color:var(--text-muted); margin-left:auto;">100%=</span>
+            <input type="number" id="inputPoliaMaxTurns" class="form-control" value="140.0" min="0.5" max="500" step="0.5" style="padding:1px 4px; font-size:0.65rem; width:50px;" onchange="applyPoliaMaxTurns()">
+            <span style="font-size:0.61rem; color:var(--text-muted);">v</span>
+          </div>
+        </div>
+      </div>
+
+      <!-- Widget Visual da Ponte H2: Pinça (BTS7960) — Cadeado Travado (Baixo) / Cadeado Aberto (Cima) -->
+      <div class="card-title">
+        <span>Ponte H2: Pinça (BTS7960)</span>
+        <span id="badgePincaLim" style="font-size:0.62rem; color:var(--text-muted);">PB14 / PB15</span>
+      </div>
+
+      <div class="polia-card">
+        <!-- Ícone Vetorial do Cadeado (Travado = Pinça p/ Baixo | Aberto = Pinça p/ Cima) -->
+        <div class="polia-visual-box" style="min-height:96px;">
+          <div class="polia-top-label fechado" id="pincaTopLabel">TRAVADA</div>
+
+          <svg id="pincaSvg" width="58" height="58" viewBox="0 0 100 100" fill="none" xmlns="http://www.w3.org/2000/svg">
+            <defs>
+              <linearGradient id="lockBodyLocked" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#10b981" stop-opacity="0.28"/>
+                <stop offset="100%" stop-color="#065f46" stop-opacity="0.45"/>
+              </linearGradient>
+              <linearGradient id="lockBodyOpen" x1="0%" y1="0%" x2="0%" y2="100%">
+                <stop offset="0%" stop-color="#38bdf8" stop-opacity="0.25"/>
+                <stop offset="100%" stop-color="#0369a1" stop-opacity="0.40"/>
+              </linearGradient>
+            </defs>
+
+            <!-- Caso 1: PINÇA PARA BAIXO (s) = CADEADO TRAVADO -->
+            <g id="svgPincaTravada">
+              <!-- Haste fechada -->
+              <path d="M 33 46 V 30 C 33 17, 67 17, 67 30 V 46"
+                    stroke="#10b981" stroke-width="6.5" stroke-linecap="round" fill="none"/>
+              <!-- Corpo do cadeado -->
+              <rect x="22" y="45" width="56" height="42" rx="8"
+                    fill="url(#lockBodyLocked)" stroke="#10b981" stroke-width="3.6"/>
+              <!-- Fechadura central -->
+              <circle cx="50" cy="62" r="5" fill="#10b981"/>
+              <path d="M 47.5 65 L 46 76 H 54 L 52.5 65 Z" fill="#10b981"/>
+            </g>
+
+            <!-- Caso 2: PINÇA PARA CIMA (w) = CADEADO ABERTO -->
+            <g id="svgPincaAberta" style="display:none;">
+              <!-- Haste erguida e destravada -->
+              <path d="M 33 46 V 22 C 33 9, 67 9, 67 21 V 29"
+                    stroke="#38bdf8" stroke-width="6.5" stroke-linecap="round" fill="none"/>
+              <!-- Corpo do cadeado -->
+              <rect x="22" y="45" width="56" height="42" rx="8"
+                    fill="url(#lockBodyOpen)" stroke="#38bdf8" stroke-width="3.6"/>
+              <!-- Fechadura central -->
+              <circle cx="50" cy="62" r="5" fill="#38bdf8"/>
+              <path d="M 47.5 65 L 46 76 H 54 L 52.5 65 Z" fill="#38bdf8"/>
+            </g>
+          </svg>
+
+          <div class="polia-bottom-label" id="pincaBottomLabel">PINÇA BAIXO</div>
+        </div>
+
+        <!-- Status e Botões de Acionamento da Pinça -->
+        <div class="polia-info-col">
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Posição:</span>
+            <strong id="lblPincaEstado" style="font-size:0.84rem; color:var(--green);">🔒 Travada (Baixo)</strong>
+          </div>
+          <div class="polia-stat-row">
+            <span style="color:var(--text-muted); font-weight:600;">Motor H2:</span>
+            <strong id="lblPincaMotor" style="font-size:0.76rem; color:var(--text-muted); font-family:Consolas,monospace;">PARADO</strong>
+          </div>
+
+          <div style="display:grid; grid-template-columns: 1fr 1fr; gap:4px; margin-top:3px;">
+            <button class="btn btn-primary" style="padding:4px 6px; font-size:0.66rem;" onclick="cmdPinca('w')">
+              🔓 Subir / Abrir (w)
+            </button>
+            <button class="btn btn-success" style="padding:4px 6px; font-size:0.66rem;" onclick="cmdPinca('s')">
+              🔒 Descer / Travar (s)
+            </button>
+          </div>
+          <button class="btn" style="padding:3px 6px; font-size:0.64rem; margin-top:2px;" onclick="cmdPinca('x')">
+            ■ Parar Pinça (x)
+          </button>
+        </div>
+      </div>
+
+      <!-- Barras PWM dos 3 Motores -->
+      <div class="card-title">
+        <span>Atuadores: PWM & Empuxo (1000..2000 µs)</span>
+      </div>
+      <div class="motor-bar-container">
+        <div class="motor-bar-item">
+          <div class="motor-bar-label">
+            <span style="color:#ef4444">Motor a — BF (+X, PA0):</span>
+            <span id="lblMotorA">1500 µs (0.0 N)</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="neutral-marker"></div>
+            <div class="progress-bar-fill bar-a" id="barMotorA" style="width:50%;"></div>
+          </div>
+        </div>
+        <div class="motor-bar-item">
+          <div class="motor-bar-label">
+            <span style="color:#10b981">Motor b — AS (+120°, PA15):</span>
+            <span id="lblMotorB">1500 µs (0.0 N)</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="neutral-marker"></div>
+            <div class="progress-bar-fill bar-b" id="barMotorB" style="width:50%;"></div>
+          </div>
+        </div>
+        <div class="motor-bar-item">
+          <div class="motor-bar-label">
+            <span style="color:#3b82f6">Motor c — TR (-120°, PA1, invertido):</span>
+            <span id="lblMotorC">1500 µs (0.0 N)</span>
+          </div>
+          <div class="progress-bar-bg">
+            <div class="neutral-marker"></div>
+            <div class="progress-bar-fill bar-c" id="barMotorC" style="width:50%;"></div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Console de Logs -->
+      <div class="card-title">
+        <span>Console Serial / Eventos</span>
+        <button class="btn" style="padding:1px 5px; font-size:0.60rem;" onclick="clearLog()">Limpar</button>
+      </div>
+      <div class="terminal" id="terminalLog">Simulador Esfera v2 inicializado.</div>
+    </div>
+
+  </div>
+
+  <script>
+    // =========================================================================
+    // 1. UTILITÁRIOS MATEMÁTICOS E CONSTANTES DE PARIDADE (esfera/)
+    // =========================================================================
+    const TWO_PI = 2.0 * Math.PI;
+    function wrapToPi(angle) {
+      return ((angle + Math.PI) % TWO_PI + TWO_PI) % TWO_PI - Math.PI;
+    }
+    function deg2rad(d) { return d * Math.PI / 180.0; }
+    function rad2deg(r) { return r * 180.0 / Math.PI; }
+
+    const REFERENCE_INERTIA_Z = 1.728; // kg*m^2 (12 kg, R=0.60 m)
+    const F_MIN_N = 0.01;
+    const LATCH_MARGIN_US = 15.0;
+
+    // Geometria física dos 3 propulsores a 120° na esfera:
+    // Motor A perpendicular ao eixo X (na direção -Y): -90° (-pi/2)
+    // Motor B a +120° de A: +30° (+pi/6)
+    // Motor C a -120° de A: +150° (+5*pi/6)
+    const MOTOR_MOUNT_ANGLES = [-Math.PI / 2, Math.PI / 6, 5 * Math.PI / 6];
+
+    // Mesmos nomes/índices do firmware (comando G/R). Desde 14/10/2026 o heading é
+    // controlado em TORQUE (AUDITORIA_CONTROLE.md SC-09) e há G8/G9 (estimador SC-02).
+    const GAIN_NAMES = [
+      "vel_kp", "vel_ki", "vel_kd", "yaw_kp", "yaw_ki",
+      "yaw_kd", "yaw_tz_max", "yaw_int_max", "vel_mode", "d_pino_cg", "k_bamb"
+    ];
+    const YAW_DEADZONE_DEG = 1.0, YAW_RESUME_DEG = 1.5, ESC_LATCH_US = 60.0;
+
+    const SCENARIOS = {
+      default: {
+        tilt_deg: [15.0, 0.0], velocity: [0.0, 0.3, 0.0], heading_deg: 0.0,
+        heading_schedule: [[8.0, 90.0]], force_events: []
+      },
+      disturbance: {
+        tilt_deg: [20.0, -10.0], velocity: [0.5, -0.4, 0.0], heading_deg: 0.0,
+        heading_schedule: [], force_events: []
+      },
+      heading: {
+        tilt_deg: [0.0, 0.0], velocity: [0.0, 0.0, 0.0], heading_deg: 0.0,
+        heading_schedule: [[2.0, 90.0], [9.0, -45.0], [16.0, 180.0]], force_events: []
+      },
+      gust: {
+        tilt_deg: [0.0, 0.0], velocity: [0.0, 0.0, 0.0], heading_deg: 0.0,
+        heading_schedule: [[6.0, 45.0]],
+        force_events: [[4.0, 6.0, 10.0, 0.0], [15.0, 16.0, -8.0, -6.0]]
+      }
+    };
+
+    // =========================================================================
+    // 2. PLANTA FÍSICA: RATTLE NÃO-LINEAR & LINEARIZADA (simulation.py)
+    // =========================================================================
+    class PendulumPlant {
+      constructor(kind = "nonlinear") {
+        this.kind = kind;
+        this.mass = 12.0;
+        this.radius = 0.60;
+        this.inertia_z = 1.728;
+        this.length = 5.0;
+        this.gravity = 9.81;
+        this.torsional_stiffness = 0.0;
+        this.torsional_damping = 0.0;
+        this._vel_mult = 0.0;
+        this.state = {
+          position: [0.0, 0.0, -5.0],
+          velocity: [0.0, 0.0, 0.0],
+          heading: 0.0,
+          heading_rate: 0.0
+        };
+      }
+
+      initialState(tilt_x, tilt_y, velocity, heading, heading_rate = 0.0) {
+        const sx = Math.sin(tilt_x), sy = Math.sin(tilt_y);
+        const s_sq = Math.min(0.98, sx * sx + sy * sy);
+        const cz = -Math.sqrt(1.0 - s_sq);
+        return {
+          position: [this.length * sx, this.length * sy, this.length * cz],
+          velocity: [...velocity],
+          heading: wrapToPi(heading),
+          heading_rate: heading_rate
+        };
+      }
+
+      reset(initState) {
+        if (this.kind === "nonlinear") {
+          const r = initState.position;
+          const norm = Math.hypot(r[0], r[1], r[2]) || 1.0;
+          const d = [r[0] / norm, r[1] / norm, r[2] / norm];
+          const pos = [d[0] * this.length, d[1] * this.length, d[2] * this.length];
+          const v = initState.velocity;
+          const vd = v[0] * d[0] + v[1] * d[1] + v[2] * d[2];
+          const vel = [v[0] - vd * d[0], v[1] - vd * d[1], v[2] - vd * d[2]];
+          this.state = {
+            position: pos,
+            velocity: vel,
+            heading: initState.heading,
+            heading_rate: initState.heading_rate
+          };
+          this._vel_mult = 0.0;
+        } else {
+          this.state = {
+            position: [initState.position[0], initState.position[1], -this.length],
+            velocity: [initState.velocity[0], initState.velocity[1], 0.0],
+            heading: initState.heading,
+            heading_rate: initState.heading_rate
+          };
+        }
+      }
+
+      step(force_world, torque_heading, dt) {
+        if (this.kind === "nonlinear") {
+          const r = this.state.position;
+          const v = this.state.velocity;
+          const L2 = this.length * this.length;
+          const ax = force_world[0] / this.mass;
+          const ay = force_world[1] / this.mass;
+          const az = -this.gravity + (force_world[2] || 0.0) / this.mass;
+
+          const v_half = [
+            v[0] + 0.5 * dt * (ax - this._vel_mult * r[0]),
+            v[1] + 0.5 * dt * (ay - this._vel_mult * r[1]),
+            v[2] + 0.5 * dt * (az - this._vel_mult * r[2])
+          ];
+          const r_star = [
+            r[0] + dt * v_half[0],
+            r[1] + dt * v_half[1],
+            r[2] + dt * v_half[2]
+          ];
+
+          const b = r_star[0] * r[0] + r_star[1] * r[1] + r_star[2] * r[2];
+          const c = (r_star[0] ** 2 + r_star[1] ** 2 + r_star[2] ** 2) - L2;
+          const disc = b * b - c * L2;
+          const alpha = disc > 0 ? (-b + Math.sqrt(Math.max(disc, 0.0))) / L2 : -c / (2.0 * b);
+
+          const r1 = [
+            r_star[0] + alpha * r[0],
+            r_star[1] + alpha * r[1],
+            r_star[2] + alpha * r[2]
+          ];
+          const v_star = [
+            v_half[0] + 0.5 * dt * ax,
+            v_half[1] + 0.5 * dt * ay,
+            v_half[2] + 0.5 * dt * az
+          ];
+          const mu = (v_star[0] * r1[0] + v_star[1] * r1[1] + v_star[2] * r1[2]) / L2;
+          const v1 = [
+            v_star[0] - mu * r1[0],
+            v_star[1] - mu * r1[1],
+            v_star[2] - mu * r1[2]
+          ];
+          this._vel_mult = 2.0 * mu / dt;
+          this.state.position = r1;
+          this.state.velocity = v1;
+        } else {
+          const wn2 = this.gravity / this.length;
+          const ax = -wn2 * this.state.position[0] + force_world[0] / this.mass;
+          const ay = -wn2 * this.state.position[1] + force_world[1] / this.mass;
+          const vx = this.state.velocity[0] + ax * dt;
+          const vy = this.state.velocity[1] + ay * dt;
+          this.state.position = [
+            this.state.position[0] + vx * dt,
+            this.state.position[1] + vy * dt,
+            -this.length
+          ];
+          this.state.velocity = [vx, vy, 0.0];
+        }
+
+        // Dinâmica de heading
+        const spring = -this.torsional_stiffness * this.state.heading - this.torsional_damping * this.state.heading_rate;
+        const alpha_z = (torque_heading + spring) / this.inertia_z;
+        this.state.heading_rate += alpha_z * dt;
+        this.state.heading = wrapToPi(this.state.heading + this.state.heading_rate * dt);
+        return this.state;
+      }
+
+      tiltAngles(state = this.state) {
+        if (this.kind === "nonlinear") {
+          const d0 = state.position[0] / this.length;
+          const d1 = state.position[1] / this.length;
+          const d2 = state.position[2] / this.length;
+          return [Math.atan2(d0, -d2), Math.atan2(d1, -d2)];
+        } else {
+          return [state.position[0] / this.length, state.position[1] / this.length];
+        }
+      }
+    }
+
+    // =========================================================================
+    // 3. CLUSTER DE ATUADORES POR MOTOR (actuators.py)
+    // =========================================================================
+    class ThrusterCluster {
+      constructor() {
+        this.pwm_neutral_us = 1500.0;
+        this.pwm_limit_us = 450.0;
+        this.swing_reserve_us = 400.0;
+        this.yaw_reserve_us = 200.0;
+        this.f_at_500us = 3.9;
+        this.reverse_ratio = 0.60;
+        this.deadzone_us = 30.0;
+        this.arm_radius = 0.70;
+        this.lag_tau = 0.12;
+
+        this.resetDefaultMotors();
+        this._u_lag = [0.0, 0.0, 0.0];
+        this._blocked = [[false, false], [false, false], [false, false]];
+      }
+
+      resetDefaultMotors() {
+        const kf_fwd = this.f_at_500us / ((500.0 - this.deadzone_us) ** 2);
+        const kf_rev = kf_fwd * this.reverse_ratio;
+        const dirs = [
+          [1.0, 0.0],
+          [-0.5, Math.sqrt(3.0) / 2.0],
+          [0.5, Math.sqrt(3.0) / 2.0] // Motor c invertido de fábrica
+        ];
+        const yaw_signs = [1.0, 1.0, -1.0];
+        const labels = ["a", "b", "c"];
+        this.motors = labels.map((lbl, i) => ({
+          label: lbl,
+          thrust_dir: dirs[i],
+          yaw_sign: yaw_signs[i],
+          kf_fwd: kf_fwd,
+          kf_rev: kf_rev,
+          deadzone_us: this.deadzone_us,
+          latch_us: 60.0
+        }));
+      }
+
+      reset() {
+        this._u_lag = [0.0, 0.0, 0.0];
+        this._blocked = [[false, false], [false, false], [false, false]];
+      }
+
+      get maxThrust() {
+        return Math.max(...this.motors.map(m => m.kf_fwd * ((this.pwm_limit_us - m.deadzone_us) ** 2)));
+      }
+
+      get maxSwingForce() {
+        return Math.min(...this.motors.map(m => {
+          const span = (this.swing_reserve_us - m.deadzone_us) ** 2;
+          return Math.min(m.kf_fwd * span, m.kf_rev * span);
+        }));
+      }
+
+      get maxNetForce() {
+        return 1.5 * this.maxSwingForce;
+      }
+
+      usFromForce(thrusts) {
+        return thrusts.map((f, i) => {
+          const m = this.motors[i];
+          const kf = f >= 0.0 ? m.kf_fwd : m.kf_rev;
+          let gate = F_MIN_N;
+          if (m.latch_us > 0) {
+            const floor = m.latch_us + LATCH_MARGIN_US;
+            gate = Math.max(gate, kf * (Math.max(floor - m.deadzone_us, 0.0) ** 2));
+          }
+          if (Math.abs(f) >= gate) {
+            return Math.sign(f) * (m.deadzone_us + Math.sqrt(Math.abs(f) / kf));
+          }
+          return 0.0;
+        });
+      }
+
+      forceFromUs(u_offsets) {
+        return u_offsets.map((u, i) => {
+          const m = this.motors[i];
+          if (Math.abs(u) <= m.deadzone_us) return 0.0;
+          const kf = u >= 0.0 ? m.kf_fwd : m.kf_rev;
+          return Math.sign(u) * kf * ((Math.abs(u) - m.deadzone_us) ** 2);
+        });
+      }
+
+      allocateSwingUs(fx_b, fy_b) {
+        const f_des = this.motors.map(m => (2.0 / 3.0) * (m.thrust_dir[0] * fx_b + m.thrust_dir[1] * fy_b));
+        let lam = 1.0;
+        for (let i = 0; i < 3; i++) {
+          const m = this.motors[i];
+          const span = (this.swing_reserve_us - m.deadzone_us) ** 2;
+          const cap = f_des[i] >= 0 ? m.kf_fwd * span : m.kf_rev * span;
+          if (Math.abs(f_des[i]) > 1e-9) {
+            lam = Math.min(lam, cap / Math.abs(f_des[i]));
+          }
+        }
+        return this.usFromForce(f_des.map(f => f * lam));
+      }
+
+      _escLatch(u_eff) {
+        return u_eff.map((u, i) => {
+          const lim = this.motors[i].latch_us;
+          if (lim <= 0) return u;
+          if (u > lim) {
+            this._blocked[i][1] = false;
+            return this._blocked[i][0] ? 0.0 : u;
+          } else if (u < -lim) {
+            this._blocked[i][0] = false;
+            return this._blocked[i][1] ? 0.0 : u;
+          } else if (u > 0.0) {
+            this._blocked[i][0] = true;
+            return 0.0;
+          } else if (u < 0.0) {
+            this._blocked[i][1] = true;
+            return 0.0;
+          }
+          return u;
+        });
+      }
+
+      _actuate(u_cmd_in, dt, bandGuard = true) {
+        const u_cmd = [...u_cmd_in];
+        if (bandGuard) {
+          for (let i = 0; i < 3; i++) {
+            const floor = this.motors[i].latch_us + LATCH_MARGIN_US;
+            if (Math.abs(u_cmd[i]) > 0.0 && Math.abs(u_cmd[i]) < floor) {
+              u_cmd[i] = 0.0;
+            }
+          }
+        }
+        const lim = this.pwm_limit_us;
+        const u_clamped = u_cmd.map(u => Math.max(-lim, Math.min(lim, u)));
+        const u_allowed = this._escLatch(u_clamped);
+        const alpha = dt / (dt + this.lag_tau);
+        for (let i = 0; i < 3; i++) {
+          this._u_lag[i] += alpha * (u_allowed[i] - this._u_lag[i]);
+          this._u_lag[i] = Math.max(-lim, Math.min(lim, this._u_lag[i]));
+        }
+        return { u_com: u_clamped, u_eff: [...this._u_lag] };
+      }
+
+      // Espelho de realizar_controle() do firmware (SC-03): força XY + torque juntos no
+      // domínio de FORÇA; torque cabe primeiro (reserva de yaw), swing escala no que sobra.
+      _cap(i, f, usLim) {
+        const m = this.motors[i];
+        const kf = f >= 0 ? m.kf_fwd : m.kf_rev;
+        const du = Math.max(usLim - m.deadzone_us, 0.0);
+        return kf * du * du;
+      }
+
+      allocateForceTorqueUs(fx_b, fy_b, tz) {
+        const f_sw = this.motors.map(m => (2.0 / 3.0) * (m.thrust_dir[0] * fx_b + m.thrust_dir[1] * fy_b));
+        const f_yw = this.motors.map(m => m.yaw_sign * tz / (3.0 * this.arm_radius));
+        let lam_y = 1.0;
+        for (let i = 0; i < 3; i++) {
+          if (Math.abs(f_yw[i]) > 1e-6) lam_y = Math.min(lam_y, this._cap(i, f_yw[i], this.yaw_reserve_us) / Math.abs(f_yw[i]));
+        }
+        const fits = (ls) => [0, 1, 2].every(i => {
+          const f = lam_y * f_yw[i] + ls * f_sw[i];
+          return Math.abs(f) <= this._cap(i, f, this.pwm_limit_us);
+        });
+        let lam_s = 1.0;
+        if (!fits(1.0)) {
+          let lo = 0.0, hi = 1.0;
+          for (let k = 0; k < 14; k++) { const mid = 0.5 * (lo + hi); if (fits(mid)) lo = mid; else hi = mid; }
+          lam_s = lo;
+        }
+        return [0, 1, 2].map(i => {
+          const f = lam_y * f_yw[i] + lam_s * f_sw[i];
+          const m = this.motors[i];
+          if (Math.abs(f) < 1e-6) return 0.0;
+          const kf = f >= 0 ? m.kf_fwd : m.kf_rev;
+          const u = Math.sign(f) * (m.deadzone_us + Math.sqrt(Math.abs(f) / kf));
+          return Math.abs(u) < ESC_LATCH_US ? 0.0 : u;
+        });
+      }
+
+      realize(force_world_des, tz_des, heading, dt) {
+        const c = Math.cos(heading), s = Math.sin(heading);
+        // Rotação Mundo -> Corpo Rz(-psi)
+        const fx_b = c * force_world_des[0] + s * force_world_des[1];
+        const fy_b = -s * force_world_des[0] + c * force_world_des[1];
+
+        const u_cmd = this.allocateForceTorqueUs(fx_b, fy_b, tz_des);
+        const { u_com, u_eff } = this._actuate(u_cmd, dt, false);
+
+        const thrusts = this.forceFromUs(u_eff);
+        let fx_b_act = 0.0, fy_b_act = 0.0, torque = 0.0;
+        for (let i = 0; i < 3; i++) {
+          fx_b_act += this.motors[i].thrust_dir[0] * thrusts[i];
+          fy_b_act += this.motors[i].thrust_dir[1] * thrusts[i];
+          torque += this.arm_radius * this.motors[i].yaw_sign * thrusts[i];
+        }
+        // Corpo -> Mundo Rz(psi)
+        const fx_w_act = c * fx_b_act - s * fy_b_act;
+        const fy_w_act = s * fx_b_act + c * fy_b_act;
+
+        return {
+          force_world: [fx_w_act, fy_w_act, 0.0],
+          torque_heading: torque,
+          thrusts: thrusts,
+          pwm_us: u_com.map(u => this.pwm_neutral_us + u)
+        };
+      }
+    }
+
+    // =========================================================================
+    // 4. CONTROLADOR PID E CASCATA DE HEADING (pid_controller.py & controller.py)
+    // =========================================================================
+    class PIDController {
+      constructor(kp, ki = 0.0, kd = 0.0, output_limit = null) {
+        this.kp = kp;
+        this.ki = ki;
+        this.kd = kd;
+        this.setpoint = 0.0;
+        this.output_limit = output_limit;
+        this.integral = 0.0;
+        this._last_meas = null;
+      }
+
+      reset() {
+        this.integral = 0.0;
+        this._last_meas = null;
+      }
+
+      update(measurement, dt) {
+        const error = this.setpoint - measurement;
+        const derivative = this._last_meas === null ? 0.0 : -(measurement - this._last_meas) / dt;
+        this._last_meas = measurement;
+
+        const p_term = this.kp * error;
+        const d_term = this.kd * derivative;
+        const i_inc = this.ki * error * dt;
+
+        if (this.output_limit === null) {
+          this.integral += error * dt;
+        } else {
+          const out_before = p_term + d_term + this.ki * this.integral;
+          const saturating = Math.abs(out_before + i_inc) > this.output_limit;
+          const reduces = (out_before * i_inc) < 0;
+          if (!saturating || reduces) {
+            this.integral += error * dt;
+          }
+        }
+
+        let out = p_term + d_term + this.ki * this.integral;
+        if (this.output_limit !== null) {
+          out = Math.max(-this.output_limit, Math.min(this.output_limit, out));
+        }
+        return out;
+      }
+    }
+
+    class EsferaController {
+      constructor(cluster) {
+        this.cluster = cluster;
+        this.gains = {           // defaults idênticos ao firmware
+          vel_kp: 18.0,
+          vel_ki: 0.0,
+          vel_kd: 0.0,
+          yaw_kp: 10.0,          // N·m/rad
+          yaw_ki: 0.0,           // N·m/(rad·s)
+          yaw_kd: 7.0,           // N·m·s/rad
+          yaw_tz_max: 8.0,       // N·m
+          yaw_int_max: 0.5,      // rad·s
+          vel_mode: 2.0,         // 0 = L·gyro | 1 = CG absoluto | 2 = cabo + bamboleio (só no firmware)
+          d_pino_cg: 0.15,       // m
+          k_bamb: 6.0            // N·s/rad (freio do bamboleio, modo 2)
+        };
+        this._yaw_rest = false;
+        this.xy_enabled = true;
+        this.heading_enabled = true;
+        this._heading_setpoint = 0.0;
+        this._vision_pointing_error = null;
+        this._integral_err_yaw = 0.0;
+        this._last_err_yaw = 0.0;
+
+        const f_lim = 0.8 * cluster.maxNetForce;
+        this.pid_vx = new PIDController(this.gains.vel_kp, this.gains.vel_ki, this.gains.vel_kd, f_lim);
+        this.pid_vy = new PIDController(this.gains.vel_kp, this.gains.vel_ki, this.gains.vel_kd, f_lim);
+        this.pid_heading_rate = {
+          reset: () => {
+            this._integral_err_yaw = 0.0;
+            this._last_err_yaw = 0.0;
+          }
+        };
+      }
+
+      syncPIDGains() {
+        const g = this.gains;
+        const f_lim = 0.8 * this.cluster.maxNetForce;
+        this.pid_vx.kp = g.vel_kp; this.pid_vx.ki = g.vel_ki; this.pid_vx.kd = g.vel_kd; this.pid_vx.output_limit = f_lim;
+        this.pid_vy.kp = g.vel_kp; this.pid_vy.ki = g.vel_ki; this.pid_vy.kd = g.vel_kd; this.pid_vy.output_limit = f_lim;
+      }
+
+      setHeadingDeg(deg) {
+        this._heading_setpoint = wrapToPi(deg2rad(deg));
+        this._vision_pointing_error = null;
+        this._integral_err_yaw = 0.0;
+        this._last_err_yaw = 0.0;
+      }
+
+      setPointingErrorDeg(bearingDeg) {
+        const err = deg2rad(bearingDeg);
+        this._heading_setpoint = wrapToPi(this._heading_setpoint + err);
+        this._vision_pointing_error = err;
+      }
+
+      update(state, dt) {
+        let fx = 0.0, fy = 0.0;
+        if (this.xy_enabled) {
+          fx = this.pid_vx.update(state.velocity[0], dt);
+          fy = this.pid_vy.update(state.velocity[1], dt);
+        }
+
+        // Espelho de passo_controle_yaw() do firmware: PID em TORQUE (SC-09) com zona
+        // morta 1,0/1,5°. Visão por evento (SC-06): o V move o setpoint uma vez.
+        let tz = 0.0;
+        if (this._vision_pointing_error !== null) {
+          this._heading_setpoint = wrapToPi(state.heading + this._vision_pointing_error);
+          this._vision_pointing_error = null;
+        }
+        if (this.heading_enabled) {
+          const angle_err = wrapToPi(this._heading_setpoint - state.heading);
+          const err_deg = rad2deg(angle_err);
+          const absErr = Math.abs(err_deg);
+          if (this._yaw_rest) {
+            if (absErr > YAW_RESUME_DEG) this._yaw_rest = false;
+          } else if (absErr <= YAW_DEADZONE_DEG && Math.abs(rad2deg(state.heading_rate)) < 1.5) {
+            this._yaw_rest = true;
+          }
+          if (this._yaw_rest) {
+            this._integral_err_yaw = 0.0;
+          } else {
+            this._integral_err_yaw += angle_err * dt;
+            if ((err_deg > 0.0 && this._last_err_yaw < 0.0) || (err_deg < 0.0 && this._last_err_yaw > 0.0)) {
+              this._integral_err_yaw = 0.0;
+            }
+            const mi = this.gains.yaw_int_max;
+            this._integral_err_yaw = Math.max(-mi, Math.min(mi, this._integral_err_yaw));
+            tz = this.gains.yaw_kp * angle_err + this.gains.yaw_ki * this._integral_err_yaw
+               - this.gains.yaw_kd * state.heading_rate;
+            const tm = this.gains.yaw_tz_max;
+            tz = Math.max(-tm, Math.min(tm, tz));
+          }
+          this._last_err_yaw = err_deg;
+        } else {
+          this._yaw_rest = false;
+        }
+
+        return {
+          force_world: [fx, fy, 0.0],
+          tz: tz,
+          heading_setpoint: this._heading_setpoint
+        };
+      }
+    }
+
+    // =========================================================================
+    // 5. ESTADO DA SESSÃO, TELEMETRIA UNIFICADA E HISTÓRICO
+    // =========================================================================
+    const plant = new PendulumPlant("nonlinear");
+    const cluster = new ThrusterCluster();
+    const controller = new EsferaController(cluster);
+
+    let modeSource = "sim"; // "sim" | "real"
+    let simPaused = false;
+    let simTime = 0.0;
+    let currentScenarioName = "default";
+    let scheduleIdx = 0;
+    let heldKeys = new Set();
+    let extForceMag = 15.0; // N (setas)
+    let extTorqueMag = 0.05; // N*m (Q/E)
+    let visionState = { active: false, bearing_deg: 0.0, D_m: -1.0, last_t: -999 };
+
+    // Itens ajustáveis por G / + / - (0 = força ext, 1..8 = GAIN_NAMES 0..7)
+    let selectedAdjustable = 0;
+
+    // Estado instantâneo exibido no 3D, Radar XY e KPIs (alimentado pelo Sim OU pelo Real)
+    const activeState = {
+      t: 0.0,
+      px: 0.0, py: 0.0, pz: -5.0,
+      vx: 0.0, vy: 0.0, vz: 0.0,
+      sx_deg: 0.0, sy_deg: 0.0,
+      yaw_deg: 0.0, yaw_des_deg: 0.0,
+      rate_z_dps: 0.0,
+      pwm: [1500, 1500, 1500],
+      thrusts: [0.0, 0.0, 0.0],
+      ext_fx: 0.0, ext_fy: 0.0,
+      L_m: 5.0,
+      D_m: -1.0,
+      bearing_deg: 0.0,
+      xy_on: true,
+      yaw_on: true,
+      vision_on: false,
+      enc_ok: true,
+      enc_voltas: 0.0,
+      enc_voltas_max: 140.0,
+      enc_pct: 0.0,
+      enc_estado: 0, // -1 = abrindo ('a'), 0 = Parado, +1 = fechando ('d')
+      pinca_locked: true, // true = Cadeado Travado (Baixo 's'), false = Cadeado Aberto (Cima 'w')
+      pinca_motor: 0,     // 1 = Subindo ('w'), -1 = Descendo ('s'), 0 = Parado ('x')
+      pinca_lim_cima: false,
+      pinca_lim_baixo: false
+    };
+
+    let poliaHoldTimer = null;
+    let poliaHoldDir = 0; // -1 = 'a' (abrindo), +1 = 'd' (fechando), 0 = parado
+
+    const MAX_HIST = 800; // ~32 s @ 25 Hz
+    const hist = {
+      t: [], sx: [], sy: [], vx: [], vy: [],
+      yaw: [], yaw_des: [],
+      pwm_a: [], pwm_b: [], pwm_c: [],
+      px: [], py: [], pz: []
+    };
+
+    function clearHistory() {
+      for (const k in hist) hist[k].length = 0;
+    }
+
+    function recordSample(s) {
+      hist.t.push(s.t);
+      hist.sx.push(s.sx_deg);
+      hist.sy.push(s.sy_deg);
+      hist.vx.push(s.vx);
+      hist.vy.push(s.vy);
+      hist.yaw.push(s.yaw_deg);
+      hist.yaw_des.push(s.yaw_des_deg);
+      hist.pwm_a.push(s.pwm[0]);
+      hist.pwm_b.push(s.pwm[1]);
+      hist.pwm_c.push(s.pwm[2]);
+      hist.px.push(s.px);
+      hist.py.push(s.py);
+      hist.pz.push(s.pz);
+
+      if (hist.t.length > MAX_HIST) {
+        for (const k in hist) hist[k].shift();
+      }
+    }
+
+    function resetSession() {
+      const sc = SCENARIOS[currentScenarioName];
+      const init = plant.initialState(
+        deg2rad(sc.tilt_deg[0]),
+        deg2rad(sc.tilt_deg[1]),
+        sc.velocity,
+        deg2rad(sc.heading_deg)
+      );
+      plant.reset(init);
+      cluster.reset();
+      controller.pid_vx.reset();
+      controller.pid_vy.reset();
+      controller.pid_heading_rate.reset();
+      controller.setHeadingDeg(sc.heading_deg);
+      simTime = 0.0;
+      scheduleIdx = 0;
+      visionState.active = false;
+      clearHistory();
+      updateSliderYawUI(sc.heading_deg);
+      logMsg(`Sessão reiniciada no cenário '${currentScenarioName}' (${plant.kind}).`);
+    }
+
+    // =========================================================================
+    // 6. PASSO DE SIMULAÇÃO LOCAL (200 Hz, idêntico ao SimSTM / LiveSession)
+    // =========================================================================
+    const SIM_DT = 0.005; // 200 Hz
+    let simTelAccum = 0.0;
+
+    function computeExternalForce(t) {
+      let fx = extForceMag * ((heldKeys.has("ArrowRight") ? 1 : 0) - (heldKeys.has("ArrowLeft") ? 1 : 0));
+      let fy = extForceMag * ((heldKeys.has("ArrowUp") ? 1 : 0) - (heldKeys.has("ArrowDown") ? 1 : 0));
+      const sc = SCENARIOS[currentScenarioName];
+      for (const [t0, t1, ex, ey] of sc.force_events) {
+        if (t >= t0 && t < t1) {
+          fx += ex;
+          fy += ey;
+        }
+      }
+      return [fx, fy, 0.0];
+    }
+
+    function computeExternalTorque() {
+      return extTorqueMag * ((heldKeys.has(".") ? 1 : 0) - (heldKeys.has(",") ? 1 : 0));
+    }
+
+    function stepLocalSimulation(dt_wall) {
+      if (modeSource !== "sim" || simPaused) return;
+      let rem = Math.min(dt_wall, 0.1);
+      const sc = SCENARIOS[currentScenarioName];
+
+      while (rem >= SIM_DT) {
+        rem -= SIM_DT;
+
+        // Agenda de heading do cenário
+        while (scheduleIdx < sc.heading_schedule.length && simTime >= sc.heading_schedule[scheduleIdx][0] - 1e-9) {
+          const deg = sc.heading_schedule[scheduleIdx][1];
+          controller.setHeadingDeg(deg);
+          updateSliderYawUI(deg);
+          scheduleIdx++;
+        }
+
+        // Timeout de visão (0.5 s como no firmware)
+        if (visionState.active && (simTime - visionState.last_t) > 0.5) {
+          visionState.active = false;
+          controller._vision_pointing_error = null;
+        }
+
+        const st = plant.state;
+        const cmd = controller.update(st, SIM_DT);
+        const act = cluster.realize(cmd.force_world, cmd.tz, st.heading, SIM_DT);
+        const f_ext = computeExternalForce(simTime);
+        const tau_ext = computeExternalTorque();
+
+        plant.step(
+          [act.force_world[0] + f_ext[0], act.force_world[1] + f_ext[1], 0.0],
+          act.torque_heading + tau_ext,
+          SIM_DT
+        );
+        simTime += SIM_DT;
+        simTelAccum += SIM_DT;
+
+        // Simulação do giro da polia (a = Abrir = -1, d = Fechar = +1)
+        const simPoliaDir = poliaHoldDir !== 0 ? poliaHoldDir : (heldKeys.has("a") ? -1 : (heldKeys.has("d") ? 1 : 0));
+        activeState.enc_estado = simPoliaDir;
+        if (simPoliaDir !== 0) {
+          activeState.enc_voltas += simPoliaDir * 3.0 * SIM_DT; // 3.0 voltas/s no simulador (45v em 15s)
+          const vmax = Math.max(0.05, activeState.enc_voltas_max);
+          activeState.enc_pct = Math.min(100.0, Math.max(0.0, (Math.abs(activeState.enc_voltas) / vmax) * 100.0));
+        }
+
+        const [tx, ty] = plant.tiltAngles(plant.state);
+        activeState.t = simTime;
+        activeState.px = plant.state.position[0];
+        activeState.py = plant.state.position[1];
+        activeState.pz = plant.state.position[2];
+        activeState.vx = plant.state.velocity[0];
+        activeState.vy = plant.state.velocity[1];
+        activeState.vz = plant.state.velocity[2];
+        activeState.sx_deg = rad2deg(tx);
+        activeState.sy_deg = rad2deg(ty);
+        activeState.yaw_deg = rad2deg(plant.state.heading);
+        activeState.yaw_des_deg = rad2deg(cmd.heading_setpoint);
+        activeState.rate_z_dps = rad2deg(plant.state.heading_rate);
+        activeState.pwm = act.pwm_us;
+        activeState.thrusts = act.thrusts;
+        activeState.ext_fx = f_ext[0];
+        activeState.ext_fy = f_ext[1];
+        activeState.L_m = plant.length;
+        activeState.D_m = visionState.active ? visionState.D_m : -1.0;
+        activeState.bearing_deg = visionState.active ? visionState.bearing_deg : 0.0;
+        activeState.xy_on = controller.xy_enabled;
+        activeState.yaw_on = controller.heading_enabled;
+        activeState.vision_on = visionState.active;
+
+        if (simTelAccum >= 0.04) { // 25 Hz log (mesma taxa do TEL)
+          simTelAccum -= 0.04;
+          recordSample(activeState);
+        }
+      }
+    }
+
+    // =========================================================================
+    // 7. PARSER DO PROTOCOLO TEL v2 & GAIN (twin/protocol.py)
+    // =========================================================================
+    let telT0_ms = null;
+    let telPacketCount = 0;
+    let telLastHzTime = performance.now();
+
+    function parseIncomingLine(rawLine) {
+      const line = rawLine.trim();
+      if (!line) return;
+
+      // 1. Linha TEL: v2 (16 campos), v3 (21 campos) ou v3+AS5600 (25 campos).
+      //    Desde 14/10/2026 sx/sy/wx/wy são do CORPO (sx>0 = deslocado para +X do motor a).
+      if (line.startsWith("TEL,")) {
+        const p = line.split(",");
+        if (p.length !== 16 && p.length !== 21 && p.length !== 25) return;
+        const t_ms = parseFloat(p[1]);
+        const yaw_deg = parseFloat(p[2]);
+        const bearing_deg = parseFloat(p[3]);
+        const yaw_des_deg = parseFloat(p[4]);
+        const rate_z_dps = parseFloat(p[5]);
+        const sx_deg = parseFloat(p[6]);
+        const sy_deg = parseFloat(p[7]);
+        const wx_dps = parseFloat(p[8]);
+        const wy_dps = parseFloat(p[9]);
+        const pwm = [parseFloat(p[10]), parseFloat(p[11]), parseFloat(p[12])];
+        const L_m = parseFloat(p[13]);
+        const D_m = parseFloat(p[14]);
+        const flags = parseInt(p[15], 10);
+
+        if (telT0_ms === null) telT0_ms = t_ms;
+        const t_sec = (t_ms - telT0_ms) / 1000.0;
+
+        // Reconstrói posição 3D na esfera de raio L a partir de sx, sy (como em twin/window.py)
+        const sx_rad = deg2rad(sx_deg);
+        const sy_rad = deg2rad(sy_deg);
+        const s2 = Math.sin(sx_rad) ** 2 + Math.sin(sy_rad) ** 2;
+        const cz = -Math.sqrt(Math.max(0.0, 1.0 - s2));
+        const px = L_m * Math.sin(sx_rad);
+        const py = L_m * Math.sin(sy_rad);
+        const pz = L_m * cz;
+
+        // Velocidade estimada no mundo v_hat = L * theta_dot (mesma convenção de twin/window.py)
+        const vx = L_m * deg2rad(wx_dps);
+        const vy = L_m * deg2rad(wy_dps);
+
+        const yaw_wrapped = ((yaw_deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+        const yaw_des_wrapped = ((yaw_des_deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0;
+
+        const u_offsets = pwm.map(v => v - cluster.pwm_neutral_us);
+        const thrusts = cluster.forceFromUs(u_offsets);
+
+        activeState.t = t_sec;
+        activeState.px = px;
+        activeState.py = py;
+        activeState.pz = pz;
+        activeState.vx = vx;
+        activeState.vy = vy;
+        activeState.vz = 0.0;
+        activeState.sx_deg = sx_deg;
+        activeState.sy_deg = sy_deg;
+        activeState.yaw_deg = yaw_wrapped;
+        activeState.yaw_des_deg = yaw_des_wrapped;
+        activeState.rate_z_dps = rate_z_dps;
+        activeState.pwm = pwm;
+        activeState.thrusts = thrusts;
+        activeState.ext_fx = 0.0;
+        activeState.ext_fy = 0.0;
+        activeState.L_m = L_m;
+        activeState.D_m = D_m;
+        activeState.bearing_deg = bearing_deg;
+        activeState.yaw_on = Boolean(flags & 1);
+        activeState.xy_on = Boolean(flags & 2);
+        activeState.vision_on = Boolean(flags & 8);
+        // Estado das malhas vem SEMPRE do STM (os comandos p/y são toggles):
+        controller.xy_enabled = activeState.xy_on;
+        controller.heading_enabled = activeState.yaw_on;
+        activeState.calib_ok = Boolean(flags & 4);
+        activeState.mpu_fail = Boolean(flags & 32);
+        activeState.rest_plumb = Boolean(flags & 64);
+        activeState.yaw_rest = Boolean(flags & 128);
+        activeState.vel_est = Boolean(flags & 256);
+        activeState.vel_cabo = Boolean(flags & 512);
+        // Bits da Pinça (Ponte H2): 1024 subindo | 2048 descendo | 4096 fim cima | 8192 fim baixo
+        const pSubindo  = Boolean(flags & 1024);
+        const pDescendo = Boolean(flags & 2048);
+        const pLimCima  = Boolean(flags & 4096);
+        const pLimBaixo = Boolean(flags & 8192);
+        activeState.pinca_motor = pSubindo ? 1 : (pDescendo ? -1 : 0);
+        activeState.pinca_lim_cima = pLimCima;
+        activeState.pinca_lim_baixo = pLimBaixo;
+        if (pSubindo || pLimCima) activeState.pinca_locked = false; // Pinça p/ cima = Cadeado Aberto
+        if (pDescendo || pLimBaixo) activeState.pinca_locked = true; // Pinça p/ baixo = Cadeado Travado
+
+        if (p.length >= 21) {
+          activeState.F_cmd = [parseFloat(p[16]), parseFloat(p[17])];
+          activeState.tz_cmd = parseFloat(p[18]);
+          activeState.vhat = [parseFloat(p[19]), parseFloat(p[20])];
+        } else {
+          activeState.F_cmd = null;
+          activeState.tz_cmd = null;
+          activeState.vhat = null;
+        }
+        if (p.length === 25) {
+          activeState.enc_ok = parseInt(p[21], 10) === 1;
+          activeState.enc_voltas = parseFloat(p[22]);
+          activeState.enc_pct = parseFloat(p[23]);
+          activeState.enc_estado = parseInt(p[24], 10);
+        }
+        if (activeState.mpu_fail && !activeState._mpuFailLogged) {
+          logMsg("⚠️ STM: MPU em FALHA — malhas desligadas. Verifique I2C e rode 'z'.");
+          activeState._mpuFailLogged = true;
+        } else if (!activeState.mpu_fail) {
+          activeState._mpuFailLogged = false;
+        }
+
+        recordSample(activeState);
+
+        telPacketCount++;
+        const now = performance.now();
+        if (now - telLastHzTime >= 1000) {
+          document.getElementById("hzLabel").innerText = `${telPacketCount} Hz`;
+          telPacketCount = 0;
+          telLastHzTime = now;
+        }
+        return;
+      }
+
+      // 2. Linha GAIN,idx,name,val
+      if (line.startsWith("GAIN,")) {
+        const p = line.split(",");
+        if (p.length === 4) {
+          const name = p[2].trim();
+          const val = parseFloat(p[3]);
+          if (name in controller.gains && !isNaN(val)) {
+            controller.gains[name] = val;
+            controller.syncPIDGains();
+            logMsg(`STM GAIN recebido: ${name} =${val}`);
+          }
+        }
+        return;
+      }
+
+      // 3. Mensagens da Pinça (Ponte H2)
+      if (line.includes("PINCA: SUBINDO") || line.includes("Atingiu o topo")) {
+        activeState.pinca_locked = false;
+        activeState.pinca_motor = line.includes("SUBINDO") ? 1 : 0;
+      } else if (line.includes("PINCA: DESCENDO") || line.includes("Atingiu a base")) {
+        activeState.pinca_locked = true;
+        activeState.pinca_motor = line.includes("DESCENDO") ? -1 : 0;
+      } else if (line.includes("PINCA: Motor PARADO")) {
+        activeState.pinca_motor = 0;
+      }
+
+      // 4. Outros logs do STM32
+      logMsg(`STM: ${line}`);
+    }
+
+    // =========================================================================
+    // 8. CONEXÕES: RASP HTTP/SSE (bridge.py), WEB SERIAL USB E WEBSOCKET
+    // =========================================================================
+    let evtSource = null;
+    let raspBaseUrl = "";
+    let serialPort = null;
+    let serialReader = null;
+    let wsClient = null;
+
+    function setRealTelemetryMode(connected, label) {
+      const dot = document.getElementById("statusDot");
+      const txt = document.getElementById("statusText");
+      const badge = document.getElementById("activeSourceBadge");
+      const mode3d = document.getElementById("lblMode3D");
+      if (connected) {
+        modeSource = "real";
+        telT0_ms = null;
+        clearHistory();
+        dot.className = "badge-dot dot-green";
+        txt.innerText = label;
+        badge.innerText = "TELEMETRIA REAL";
+        badge.style.color = "var(--green)";
+        mode3d.innerText = "TELEMETRIA REAL (STM32)";
+      } else {
+        modeSource = "sim";
+        dot.className = "badge-dot dot-amber";
+        txt.innerText = "Simulador v2 Ativo";
+        badge.innerText = "SIMULADOR";
+        badge.style.color = "var(--amber)";
+        mode3d.innerText = "RATTLE 200 Hz (SIM)";
+        document.getElementById("hzLabel").innerText = "25 Hz";
+      }
+    }
+
+    // --- A. Ponte HTTP/SSE da Raspberry Pi (bridge.py) ---
+    function updateCameraUI(connected) {
+      const badge = document.getElementById("badgeCameraStatus");
+      const btnPop = document.getElementById("btnPopoutCamera");
+      const img = document.getElementById("cameraStreamImg");
+      const holder = document.getElementById("cameraPlaceholder");
+      if (connected && raspBaseUrl) {
+        badge.style.display = "";
+        badge.innerText = "🟢 AO VIVO";
+        badge.style.color = "var(--green)";
+        btnPop.style.display = "";
+        img.src = `${raspBaseUrl}/api/video?t=${Date.now()}`;
+        img.style.display = "block";
+        holder.style.display = "none";
+      } else {
+        badge.innerText = "⚪ OFFLINE";
+        badge.style.color = "var(--text-muted)";
+        btnPop.style.display = "none";
+        img.src = "";
+        img.style.display = "none";
+        holder.style.display = "flex";
+      }
+    }
+
+    function switchVisualTab(tab) {
+      const cXY = document.getElementById("canvasXY");
+      const wrapCam = document.getElementById("cameraFeedWrapper");
+      const bRad = document.getElementById("btnTabRadar");
+      const bCam = document.getElementById("btnTabCamera");
+      if (tab === "camera") {
+        cXY.style.display = "none";
+        wrapCam.style.display = "flex";
+        bCam.className = "btn btn-primary";
+        bRad.className = "btn";
+        if (evtSource && raspBaseUrl) {
+          const img = document.getElementById("cameraStreamImg");
+          if (!img.src || img.src === window.location.href) {
+            img.src = `${raspBaseUrl}/api/video?t=${Date.now()}`;
+          }
+        }
+      } else {
+        wrapCam.style.display = "none";
+        cXY.style.display = "block";
+        bRad.className = "btn btn-primary";
+        bCam.className = "btn";
+      }
+    }
+
+    function openCameraPopout() {
+      const url = `${raspBaseUrl || "http://192.168.0.50:8080"}/api/video`;
+      window.open(url, "CameraEsfera", "width=850,height=520,menubar=no,toolbar=no");
+    }
+
+    function toggleRaspConnection() {
+      if (evtSource) {
+        evtSource.close();
+        evtSource = null;
+        document.getElementById("btnConnectRasp").innerText = "📡 Conectar à Raspberry Pi";
+        setRealTelemetryMode(false);
+        updateCameraUI(false);
+        logMsg("Desconectado da Raspberry Pi.");
+        return;
+      }
+
+      raspBaseUrl = document.getElementById("raspUrlInput").value.trim().replace(/\/+$/, "");
+      const streamUrl = `${raspBaseUrl}/api/stream`;
+      try {
+        evtSource = new EventSource(streamUrl);
+        evtSource.onopen = () => {
+          document.getElementById("btnConnectRasp").innerText = "❌ Desconectar Raspberry Pi";
+          setRealTelemetryMode(true, `Rasp (${raspBaseUrl})`);
+          updateCameraUI(true);
+          logMsg(`Conectado ao stream SSE da Raspberry Pi em ${streamUrl}`);
+        };
+        evtSource.onmessage = (e) => parseIncomingLine(e.data);
+        evtSource.onerror = () => {
+          logMsg("Aviso: erro/reconexão no stream SSE da Raspberry Pi.");
+        };
+      } catch (err) {
+        logMsg(`Erro ao conectar à Raspberry Pi: ${err.message}`);
+      }
+    }
+
+    // --- B. Web Serial USB ---
+    async function toggleSerialConnection() {
+      if (serialPort) {
+        if (serialReader) await serialReader.cancel();
+        await serialPort.close();
+        serialPort = null;
+        document.getElementById("btnConnectSerial").innerText = "🔌 Conectar Porta Serial USB";
+        setRealTelemetryMode(false);
+        logMsg("Porta Serial USB desconectada.");
+        return;
+      }
+      if (!("serial" in navigator)) {
+        alert("Use Chrome ou Edge para suporte à Web Serial API.");
+        return;
+      }
+      try {
+        serialPort = await navigator.serial.requestPort();
+        await serialPort.open({ baudRate: 115200 });
+        document.getElementById("btnConnectSerial").innerText = "❌ Desconectar Serial USB";
+        setRealTelemetryMode(true, "Serial USB (115200)");
+        logMsg("Conectado à STM32 via Web Serial USB.");
+        readSerialLoop();
+      } catch (err) {
+        logMsg(`Falha na Serial USB: ${err.message}`);
+      }
+    }
+
+    async function readSerialLoop() {
+      const decoder = new TextDecoderStream();
+      serialPort.readable.pipeTo(decoder.writable);
+      serialReader = decoder.readable.getReader();
+      let buf = "";
+      try {
+        while (true) {
+          const { value, done } = await serialReader.read();
+          if (done) break;
+          if (value) {
+            buf += value;
+            const lines = buf.split("\n");
+            buf = lines.pop();
+            for (const ln of lines) parseIncomingLine(ln);
+          }
+        }
+      } catch (err) {
+        logMsg(`Erro de leitura serial: ${err.message}`);
+      } finally {
+        serialReader.releaseLock();
+      }
+    }
+
+    // --- C. WebSocket ---
+    function toggleWsConnection() {
+      if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+        wsClient.close();
+        wsClient = null;
+        document.getElementById("btnConnectWs").innerText = "🌐 Conectar WebSocket";
+        setRealTelemetryMode(false);
+        return;
+      }
+      const url = document.getElementById("wsUrlInput").value.trim();
+      try {
+        wsClient = new WebSocket(url);
+        wsClient.onopen = () => {
+          document.getElementById("btnConnectWs").innerText = "❌ Desconectar WebSocket";
+          setRealTelemetryMode(true, `WS (${url})`);
+          logMsg(`WebSocket conectado: ${url}`);
+        };
+        wsClient.onmessage = (e) => parseIncomingLine(e.data);
+        wsClient.onclose = () => {
+          document.getElementById("btnConnectWs").innerText = "🌐 Conectar WebSocket";
+          setRealTelemetryMode(false);
+        };
+      } catch (err) {
+        logMsg(`Erro WebSocket: ${err.message}`);
+      }
+    }
+
+    // --- Envio Unificado de Comandos ao Hardware (STM32) ---
+    async function sendRawCmd(cmd) {
+      const clean = cmd.trim();
+      if (!clean) return;
+
+      // 1. Via HTTP na Raspberry Pi (se conectado ao bridge.py ou servido por HTTP)
+      if (evtSource || window.location.protocol.startsWith("http")) {
+        const base = evtSource ? raspBaseUrl : "";
+        try {
+          fetch(`${base}/api/cmd?c=${encodeURIComponent(clean)}`);
+        } catch (e) {}
+      }
+      // 2. Via Web Serial USB
+      if (serialPort && serialPort.writable) {
+        try {
+          const writer = serialPort.writable.getWriter();
+          await writer.write(new TextEncoder().encode(clean + "\n"));
+          writer.releaseLock();
+        } catch (e) {}
+      }
+      // 3. Via WebSocket
+      if (wsClient && wsClient.readyState === WebSocket.OPEN) {
+        wsClient.send(clean + "\n");
+      }
+      logMsg(`CMD → ${clean}`);
+    }
+
+    // =========================================================================
+    // 9. AÇÕES DE INTERFACE E TECLADO (paridade com interactive.py e twin)
+    // =========================================================================
+    function switchTab(tab) {
+      ["sim", "rasp", "serial", "ws"].forEach(t => {
+        const cap = t.charAt(0).toUpperCase() + t.slice(1);
+        document.getElementById(`tab${cap}Btn`).classList.toggle("active", t === tab);
+        document.getElementById(`tab${cap}Content`).style.display = (t === tab) ? "flex" : "none";
+      });
+      if (tab === "sim" && !evtSource && !serialPort && (!wsClient || wsClient.readyState !== WebSocket.OPEN)) {
+        setRealTelemetryMode(false);
+      }
+    }
+
+    function changeScenario(name) {
+      currentScenarioName = name;
+      resetSession();
+    }
+
+    function changePlantType(kind) {
+      plant.kind = kind;
+      resetSession();
+    }
+
+    function togglePause() {
+      simPaused = !simPaused;
+      const btn = document.getElementById("btnSimPause");
+      btn.innerText = simPaused ? "▶ Retomar (espaço)" : "⏸ Pausar (espaço)";
+      btn.className = simPaused ? "btn btn-success btn-block" : "btn btn-warning btn-block";
+    }
+
+    // Regra: em modo SIMULADOR as ações mexem só no sim; em modo REAL só mandam o comando
+    // ao STM e o estado (ligado/desligado) volta pelas flags da TEL. Antes os dois
+    // aconteciam sempre: o toggle local e o do STM podiam ficar trocados (TW-03) e uma
+    // tecla no simulador ligava a malha da esfera real se houvesse conexão aberta.
+    function isReal() { return modeSource === "real"; }
+
+    function toggleXYLoop() {
+      if (isReal()) { sendRawCmd("p"); return; }
+      controller.xy_enabled = !controller.xy_enabled;
+      if (controller.xy_enabled) {
+        controller.pid_vx.reset();
+        controller.pid_vy.reset();
+      }
+    }
+
+    function toggleHeadingLoop() {
+      if (isReal()) { sendRawCmd("y"); return; }
+      controller.heading_enabled = !controller.heading_enabled;
+      if (controller.heading_enabled) {
+        controller.pid_heading_rate.reset();
+      }
+    }
+
+    function sendKillSwitch() {
+      // A parada geral vai SEMPRE ao STM (segurança), e para o sim também.
+      controller.xy_enabled = false;
+      controller.heading_enabled = false;
+      cluster.reset();
+      sendRawCmd("k");
+      logMsg("🛑 PARADA GERAL (k): malhas desligadas e motores em 1500 µs.");
+    }
+
+    function stepHeading(deltaDeg) {
+      if (isReal()) { sendRawCmd(deltaDeg.toFixed(3)); return; }   // degrau relativo no STM
+      const newDeg = rad2deg(controller._heading_setpoint) + deltaDeg;
+      controller.setHeadingDeg(newDeg);
+      updateSliderYawUI(rad2deg(controller._heading_setpoint));
+    }
+
+    function setHeadingAbsolute(deg) {
+      const delta = deg - rad2deg(controller._heading_setpoint);
+      controller.setHeadingDeg(deg);
+      updateSliderYawUI(deg);
+      if (isReal() && Math.abs(delta) > 1e-3) sendRawCmd(delta.toFixed(3));
+    }
+
+    function zeroHeading() {
+      if (isReal()) { sendRawCmd("0"); return; }
+      controller.setHeadingDeg(0.0);
+      updateSliderYawUI(0.0);
+    }
+
+    function confirmMotorTest() {
+      if (confirm("Teste 'm': gira cada motor ±200 µs por 2 s e BLOQUEIA o STM ~18 s (sem 'k'). Continuar?")) {
+        sendRawCmd("m");
+      }
+    }
+
+    function toggleVelMode() {
+      // 0 = L·gyro | 1 = CG absoluto (só âncora fixa) | 2 = cabo relativo + freio do bamboleio
+      const v = (Math.round(controller.gains.vel_mode) + 1) % 3;
+      controller.gains.vel_mode = v;
+      sendRawCmd(`G8 ${v}`);
+      renderGainsGrid();
+      const nomes = ["L·gyro", "estimador do CG (absoluto — só âncora fixa)", "cabo relativo + freio do bamboleio (padrão)"];
+      logMsg(`Velocidade do anti-balanço: ${nomes[v]} (G8 = ${v}).`);
+    }
+
+    function updateSliderYawUI(deg) {
+      const wrapped = Math.round(((deg + 180.0) % 360.0 + 360.0) % 360.0 - 180.0);
+      document.getElementById("sliderYawDes").value = wrapped;
+      document.getElementById("lblYawDes").innerText = `${wrapped.toFixed(1)}°`;
+    }
+
+    function applyLengthL() {
+      const val = parseFloat(document.getElementById("inputLengthL").value);
+      if (val >= 0.5 && val <= 6.0) {
+        plant.length = val;
+        sendRawCmd(`L${val.toFixed(3)}`);
+        logMsg(`Comprimento do cabo ajustado para L = ${val.toFixed(2)} m.`);
+      }
+    }
+
+    function applyInertia() {
+      const iz = parseFloat(document.getElementById("inputInertia").value);
+      if (iz > 0.05) {
+        plant.inertia_z = iz;
+        logMsg(`Inércia Iz = ${iz.toFixed(3)} kg·m² aplicada.`);
+      }
+    }
+
+    function sendVisionPacket() {
+      const b = parseFloat(document.getElementById("inputVisBearing").value) || 0.0;
+      const d = parseFloat(document.getElementById("inputVisD").value);
+      visionState = { active: true, bearing_deg: b, D_m: d, last_t: simTime };
+      controller.setPointingErrorDeg(b);
+      // Contrato V<bearing> <D> exige espaço entre o bearing e a distância
+      sendRawCmd(`V${b.toFixed(2)} ${d.toFixed(2)}`);
+    }
+
+    function loadCalibJson(event) {
+      const file = event.target.files[0];
+      if (!file) return;
+      const reader = new FileReader();
+      reader.onload = (e) => {
+        try {
+          const data = JSON.parse(e.target.result);
+          if (data.pwm_limit_us) cluster.pwm_limit_us = parseFloat(data.pwm_limit_us);
+          if (data.swing_reserve_us) cluster.swing_reserve_us = parseFloat(data.swing_reserve_us);
+          if (data.yaw_reserve_us) cluster.yaw_reserve_us = parseFloat(data.yaw_reserve_us);
+          if (data.arm_radius_m) cluster.arm_radius = parseFloat(data.arm_radius_m);
+          if (data.lag_tau_s) cluster.lag_tau = parseFloat(data.lag_tau_s);
+          if (Array.isArray(data.motors) && data.motors.length === 3) {
+            cluster.motors = data.motors.map(m => ({
+              label: String(m.label),
+              thrust_dir: [ parseFloat(m.thrust_dir[0]), parseFloat(m.thrust_dir[1]) ],
+              yaw_sign: parseFloat(m.yaw_sign),
+              kf_fwd: parseFloat(m.kf_fwd),
+              kf_rev: parseFloat(m.kf_rev),
+              deadzone_us: parseFloat(m.deadzone_us),
+              latch_us: parseFloat(m.latch_us ?? 60.0)
+            }));
+          }
+          controller.syncPIDGains();
+          logMsg(`Calibração por motor carregada com sucesso de '${file.name}' (simulador).`);
+          // Envio ao STM (comando M; RAM). O firmware ignora a direção (geometria fixa) e
+          // aplica yaw_sign + kf_fwd/kf_rev/dz se estiverem na faixa plausível.
+          if (isReal()) {
+            const resumo = cluster.motors.map((m, i) =>
+              `${m.label}: yaw ${m.yaw_sign > 0 ? "+" : "-"}  kf ${(m.kf_fwd * 1e5).toFixed(2)}/${(m.kf_rev * 1e5).toFixed(2)} e-5  dz ${m.deadzone_us.toFixed(0)} µs`).join("\n");
+            if (confirm(`Enviar ao STM?\n\n${resumo}\n\n(Direções são ignoradas pelo firmware.)`)) {
+              cluster.motors.forEach((m, i) => {
+                const g = (v) => Number(v).toPrecision(4);
+                sendRawCmd(`M${i} ${g(m.thrust_dir[0])} ${g(m.thrust_dir[1])} ${m.yaw_sign >= 0 ? "+1" : "-1"} ${g(m.kf_fwd)} ${g(m.kf_rev)} ${g(m.deadzone_us)}`);
+              });
+              logMsg("calib.json enviado ao STM (M0..M2). Veja a resposta '>> [MOTOR i]' no log.");
+            }
+          }
+        } catch (err) {
+          logMsg(`Erro ao ler calib.json: ${err.message}`);
+        }
+      };
+      reader.readAsText(file);
+    }
+
+    function cmdPinca(cmd) {
+      if (cmd === "w") {
+        activeState.pinca_locked = false; // Pinça p/ cima = Cadeado Aberto
+        activeState.pinca_motor = 1;
+      } else if (cmd === "s") {
+        activeState.pinca_locked = true;  // Pinça p/ baixo = Cadeado Travado
+        activeState.pinca_motor = -1;
+      } else if (cmd === "x") {
+        activeState.pinca_motor = 0;
+      }
+      if (isReal()) {
+        sendRawCmd(cmd);
+      } else {
+        // No simulador, simula parada no fim de curso após 0.8 s
+        if (cmd === "w" || cmd === "s") {
+          setTimeout(() => { activeState.pinca_motor = 0; }, 800);
+        }
+      }
+    }
+
+    function startPoliaHold(cmd) {
+      stopPoliaHold(false);
+      poliaHoldDir = (cmd === "a") ? -1 : 1; // a = Abrir (-1), d = Fechar (+1)
+      if (isReal()) {
+        sendRawCmd(cmd);
+        poliaHoldTimer = setInterval(() => {
+          if (isReal()) sendRawCmd(cmd);
+        }, 100); // alimenta o watchdog de 250 ms da polia no STM32
+      }
+    }
+
+    function stopPoliaHold(forceStopCmd = false) {
+      const wasMoving = (poliaHoldTimer !== null || poliaHoldDir !== 0);
+      if (poliaHoldTimer !== null) {
+        clearInterval(poliaHoldTimer);
+        poliaHoldTimer = null;
+      }
+      poliaHoldDir = 0;
+      if (isReal() && (wasMoving || forceStopCmd)) {
+        sendRawCmd("c");
+      }
+    }
+
+    function zeroPoliaTurns() {
+      activeState.enc_voltas = 0.0;
+      activeState.enc_pct = 0.0;
+      if (isReal()) sendRawCmd("E0");
+      logMsg("Contador da polia zerado (0.00 voltas / 0%).");
+    }
+
+    function applyPoliaMaxTurns() {
+      const v = parseFloat(document.getElementById("inputPoliaMaxTurns").value);
+      if (!isNaN(v) && v >= 0.05 && v <= 500.0) {
+        activeState.enc_voltas_max = v;
+        activeState.enc_pct = Math.min(100.0, Math.max(0.0, (Math.abs(activeState.enc_voltas) / v) * 100.0));
+        if (isReal()) sendRawCmd(`E${v.toFixed(3)}`);
+        logMsg(`Curso de 100% da polia ajustado para ${v.toFixed(1)} voltas.`);
+      }
+    }
+
+    // Teclado — tabela única em docs/COMANDOS.md (mesmas teclas da Rasp e do twin).
+    // Letras que são comando do STM enviam a PRÓPRIA letra (tecla = comando); as demais
+    // são locais e não colidem com nenhum comando do STM.
+    const TECLAS_STM_DIRETAS = new Set(["w", "s", "x", "a", "d", "c", "e", "z", "t"]);
+    window.addEventListener("keydown", (e) => {
+      if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+
+      if (["ArrowUp", "ArrowDown", "ArrowLeft", "ArrowRight"].includes(e.key)) {
+        e.preventDefault();
+        heldKeys.add(e.key);
+        return;
+      }
+      const k = e.key;
+      if (k === "," || k === ".") {             // torque externo (só simulador)
+        heldKeys.add(k);
+      } else if (k === "k" || k === "K") {
+        sendKillSwitch();
+      } else if (k === "p") {
+        toggleXYLoop();
+      } else if (k === "y") {
+        toggleHeadingLoop();
+      } else if (k === "[") {
+        stepHeading(-15.0);
+      } else if (k === "]") {
+        stepHeading(15.0);
+      } else if (k === "0") {
+        zeroHeading();
+      } else if (k === "w" || k === "s" || k === "x") {
+        cmdPinca(k);
+      } else if (TECLAS_STM_DIRETAS.has(k)) {
+        if (k === "a" || k === "d") heldKeys.add(k);
+        if (k === "c") { heldKeys.delete("a"); heldKeys.delete("d"); stopPoliaHold(false); }
+        if (isReal()) sendRawCmd(k);
+        else if (k !== "a" && k !== "d" && k !== "c") logMsg(`Tecla '${k}' é comando do STM — sem efeito no simulador.`);
+      } else if (k === "r") {
+        if (!isReal()) resetSession();
+      } else if (k === " ") {
+        e.preventDefault();
+        togglePause();
+      }
+    });
+
+    window.addEventListener("keyup", (e) => {
+      heldKeys.delete(e.key);
+      heldKeys.delete(e.key.toLowerCase());
+    });
+
+    // =========================================================================
+    // 10. RENDERIZAÇÃO 3D (CENA DE interactive.py + twin/window.py A 60 FPS)
+    // =========================================================================
+    const canvas3D = document.getElementById("canvas3D");
+    const ctx3D = canvas3D.getContext("2d");
+
+    let camElev = deg2rad(15);
+    let camAzim = deg2rad(-60);
+    let camZoom = 1.0;
+    let isDragging = false;
+    let lastMouseX = 0, lastMouseY = 0;
+
+    canvas3D.addEventListener("mousedown", (e) => {
+      isDragging = true; lastMouseX = e.clientX; lastMouseY = e.clientY;
+    });
+    window.addEventListener("mouseup", () => isDragging = false);
+    window.addEventListener("mousemove", (e) => {
+      if (!isDragging) return;
+      camAzim += (e.clientX - lastMouseX) * 0.008;
+      camElev = Math.max(-0.3, Math.min(1.3, camElev + (e.clientY - lastMouseY) * 0.008));
+      lastMouseX = e.clientX; lastMouseY = e.clientY;
+    });
+    canvas3D.addEventListener("wheel", (e) => {
+      e.preventDefault();
+      adjustZoom(e.deltaY < 0 ? 1.08 : 0.92);
+    }, { passive: false });
+
+    function resetCamera() {
+      camElev = deg2rad(15);
+      camAzim = deg2rad(-60);
+      camZoom = 1.0;
+    }
+    function adjustZoom(factor) {
+      camZoom = Math.max(0.4, Math.min(2.8, camZoom * factor));
+    }
+
+    function project3D(x, y, z, cx, cy, scale, D_cam, zCenter) {
+      const xr = x, yr = y, zr = z - zCenter;
+      const cA = Math.cos(camAzim), sA = Math.sin(camAzim);
+      const x1 = -sA * xr + cA * yr;
+      const y1 = -cA * xr - sA * yr;
+      const z1 = zr;
+
+      const cE = Math.cos(camElev), sE = Math.sin(camElev);
+      const xc = x1;
+      const yc = cE * z1 - sE * y1;
+      const zc = sE * z1 + cE * y1 + D_cam;
+
+      const depth = Math.max(0.2, zc);
+      const f = (scale * camZoom) / depth;
+      return { x: cx + xc * f, y: cy - yc * f, f: f };
+    }
+
+    function drawLine3D(p1, p2, cx, cy, scale, D_cam, zCenter, color, width = 1.5, dash = []) {
+      const a = project3D(p1[0], p1[1], p1[2], cx, cy, scale, D_cam, zCenter);
+      const b = project3D(p2[0], p2[1], p2[2], cx, cy, scale, D_cam, zCenter);
+      ctx3D.beginPath();
+      ctx3D.setLineDash(dash);
+      ctx3D.strokeStyle = color;
+      ctx3D.lineWidth = width;
+      ctx3D.moveTo(a.x, a.y);
+      ctx3D.lineTo(b.x, b.y);
+      ctx3D.stroke();
+      ctx3D.setLineDash([]);
+    }
+
+    function render3DScene() {
+      const w = canvas3D.width = canvas3D.clientWidth;
+      const h = canvas3D.height = canvas3D.clientHeight;
+      ctx3D.clearRect(0, 0, w, h);
+
+      const L = Math.max(0.5, activeState.L_m);
+      const R_esf = plant.radius; // 0.60 m
+      const span = L + R_esf + 0.6;
+      const zCenter = -L * 0.55;
+      const D_cam = span * 2.8;
+      const scale = Math.min(w, h) * 1.25;
+      const cx = w * 0.52;
+      const cy = h * 0.48;
+
+      // 1. Grade de referência abaixo da esfera
+      const zFloor = -(L + R_esf + 0.35);
+      const gridLim = Math.max(0.9, L * 0.65);
+      const step = gridLim / 3;
+      for (let g = -gridLim; g <= gridLim + 1e-4; g += step) {
+        drawLine3D([g, -gridLim, zFloor], [g, gridLim, zFloor], cx, cy, scale, D_cam, zCenter, "rgba(255,255,255,0.07)", 1);
+        drawLine3D([-gridLim, g, zFloor], [gridLim, g, zFloor], cx, cy, scale, D_cam, zCenter, "rgba(255,255,255,0.07)", 1);
+      }
+
+      // Eixos do mundo no piso
+      const axLen = 0.35 * gridLim;
+      drawLine3D([0, 0, zFloor], [axLen, 0, zFloor], cx, cy, scale, D_cam, zCenter, "#ef4444", 2);
+      drawLine3D([0, 0, zFloor], [0, axLen, zFloor], cx, cy, scale, D_cam, zCenter, "#10b981", 2);
+      drawLine3D([0, 0, zFloor], [0, 0, zFloor + axLen], cx, cy, scale, D_cam, zCenter, "#38bdf8", 2);
+
+      // 2. Pino fixo (0,0,0) e linha vertical de repouso
+      drawLine3D([0, 0, 0], [0, 0, -L], cx, cy, scale, D_cam, zCenter, "rgba(148,163,184,0.35)", 1.2, [4, 4]);
+      const pivo = project3D(0, 0, 0, cx, cy, scale, D_cam, zCenter);
+      ctx3D.fillStyle = "#f8fafc";
+      ctx3D.beginPath();
+      ctx3D.arc(pivo.x, pivo.y, 4.5, 0, TWO_PI);
+      ctx3D.fill();
+
+      // 3. Rastro 3D recente (últimos ~75 samples = 3 s)
+      const nTrail = Math.min(hist.px.length, 75);
+      if (nTrail > 1) {
+        ctx3D.beginPath();
+        ctx3D.strokeStyle = "rgba(56, 189, 248, 0.55)";
+        ctx3D.lineWidth = 1.5;
+        const startIdx = hist.px.length - nTrail;
+        for (let i = startIdx; i < hist.px.length; i++) {
+          const p = project3D(hist.px[i], hist.py[i], hist.pz[i], cx, cy, scale, D_cam, zCenter);
+          if (i === startIdx) ctx3D.moveTo(p.x, p.y);
+          else ctx3D.lineTo(p.x, p.y);
+        }
+        ctx3D.stroke();
+      }
+
+      // 4. Linha de Transmissão 3D à distância D abaixo da esfera (quando visão ativa)
+      const center = [activeState.px, activeState.py, activeState.pz];
+      if (activeState.D_m !== null && activeState.D_m >= 0) {
+        const ang = deg2rad(-(activeState.yaw_deg + activeState.bearing_deg));
+        const dir = [Math.cos(ang), Math.sin(ang), 0.0];
+        const below = [center[0], center[1], center[2] - activeState.D_m];
+        const p1 = [below[0] - 0.85 * dir[0], below[1] - 0.85 * dir[1], below[2]];
+        const p2 = [below[0] + 0.85 * dir[0], below[1] + 0.85 * dir[1], below[2]];
+        drawLine3D(p1, p2, cx, cy, scale, D_cam, zCenter, "#d97706", 4.0);
+        drawLine3D(center, below, cx, cy, scale, D_cam, zCenter, "rgba(217, 119, 6, 0.45)", 1.2, [3, 3]);
+      }
+
+      // 5. Corda rígida (pino -> centro da esfera)
+      drawLine3D([0, 0, 0], center, cx, cy, scale, D_cam, zCenter, "#b45309", 2.5);
+
+      // 6. Esfera: sombreado + 3 círculos máximos que giram com o heading (interactive.py)
+      const cProj = project3D(center[0], center[1], center[2], cx, cy, scale, D_cam, zCenter);
+      const rPx = Math.max(8, R_esf * cProj.f);
+      const grad = ctx3D.createRadialGradient(
+        cProj.x - rPx * 0.3, cProj.y - rPx * 0.3, rPx * 0.1,
+        cProj.x, cProj.y, rPx
+      );
+      grad.addColorStop(0, "rgba(251, 146, 60, 0.38)");
+      grad.addColorStop(1, "rgba(124, 45, 18, 0.18)");
+      ctx3D.beginPath();
+      ctx3D.arc(cProj.x, cProj.y, rPx, 0, TWO_PI);
+      ctx3D.fillStyle = grad;
+      ctx3D.fill();
+
+      const psi = deg2rad(-activeState.yaw_deg);
+      const cPsi = Math.cos(psi), sPsi = Math.sin(psi);
+      const N_PTS = 48;
+      for (let plane = 0; plane < 3; plane++) {
+        ctx3D.beginPath();
+        ctx3D.strokeStyle = plane === 0 ? "#fb923c" : "rgba(251, 146, 60, 0.65)";
+        ctx3D.lineWidth = plane === 0 ? 1.6 : 1.1;
+        for (let k = 0; k <= N_PTS; k++) {
+          const th = (k / N_PTS) * TWO_PI;
+          let bx = 0, by = 0, bz = 0;
+          if (plane === 0) { bx = Math.cos(th); by = Math.sin(th); bz = 0; }
+          else if (plane === 1) { bx = Math.cos(th); by = 0; bz = Math.sin(th); }
+          else { bx = 0; by = Math.cos(th); bz = Math.sin(th); }
+
+          const wx = center[0] + R_esf * (cPsi * bx - sPsi * by);
+          const wy = center[1] + R_esf * (sPsi * bx + cPsi * by);
+          const wz = center[2] + R_esf * bz;
+          const p = project3D(wx, wy, wz, cx, cy, scale, D_cam, zCenter);
+          if (k === 0) ctx3D.moveTo(p.x, p.y);
+          else ctx3D.lineTo(p.x, p.y);
+        }
+        ctx3D.stroke();
+      }
+
+      // 7. Os 3 Propulsores e Setas de Empuxo (vermelho = frente, azul = ré, como em interactive.py)
+      const f_max = cluster.maxThrust || 18.0;
+      const armR = cluster.arm_radius;
+      for (let j = 0; j < 3; j++) {
+        const m = cluster.motors[j];
+        const tx_b = m.thrust_dir[0], ty_b = m.thrust_dir[1];
+        const mx_b = armR * Math.cos(MOTOR_MOUNT_ANGLES[j]);
+        const my_b = armR * Math.sin(MOTOR_MOUNT_ANGLES[j]);
+
+        const mx = center[0] + (cPsi * mx_b - sPsi * my_b);
+        const my = center[1] + (sPsi * mx_b + cPsi * my_b);
+        const mz = center[2];
+
+        const dx = cPsi * tx_b - sPsi * ty_b;
+        const dy = sPsi * tx_b + cPsi * ty_b;
+
+        const mProj = project3D(mx, my, mz, cx, cy, scale, D_cam, zCenter);
+        ctx3D.beginPath();
+        ctx3D.arc(mProj.x, mProj.y, 4, 0, TWO_PI);
+        ctx3D.fillStyle = "#e2e8f0";
+        ctx3D.fill();
+        ctx3D.fillStyle = "#cbd5e1";
+        ctx3D.font = "bold 10px Consolas, monospace";
+        ctx3D.fillText(m.label.toUpperCase(), mProj.x + 5, mProj.y - 4);
+
+        const f = activeState.thrusts[j];
+        const sign = f >= 0 ? 1.0 : -1.0;
+        const len = R_esf * (0.35 + 1.25 * (Math.abs(f) / f_max));
+        const tip = [mx + sign * len * dx, my + sign * len * dy, mz];
+        drawLine3D([mx, my, mz], tip, cx, cy, scale, D_cam, zCenter, f >= 0 ? "#ef4444" : "#3b82f6", 3.2);
+      }
+
+      // 8. Seta Verde: Força Externa Aplicada pelas Setas (interactive.py)
+      const f_ext_norm = Math.hypot(activeState.ext_fx, activeState.ext_fy);
+      if (f_ext_norm > 1e-3) {
+        const tip = [
+          center[0] + 0.04 * activeState.ext_fx,
+          center[1] + 0.04 * activeState.ext_fy,
+          center[2]
+        ];
+        drawLine3D(center, tip, cx, cy, scale, D_cam, zCenter, "#22c55e", 3.5);
+      }
+    }
+
+    // =========================================================================
+    // 11. GRÁFICO XY & YAW (VISTA SUPERIOR / RADAR PLANAR)
+    // =========================================================================
+    const canvasXY = document.getElementById("canvasXY");
+    const ctxXY = canvasXY.getContext("2d");
+
+    function renderXYAndYawChart() {
+      const w = canvasXY.width = canvasXY.clientWidth;
+      const h = canvasXY.height = canvasXY.clientHeight;
+      ctxXY.clearRect(0, 0, w, h);
+
+      const cx = w * 0.5;
+      const cy = h * 0.5;
+      const maxR_m = Math.max(0.45, activeState.L_m * 0.55);
+      const pxPerM = (Math.min(w, h) * 0.42) / maxR_m;
+
+      // Anéis de distância em metros
+      ctxXY.strokeStyle = "rgba(255,255,255,0.08)";
+      ctxXY.lineWidth = 1;
+      [0.33, 0.66, 1.0].forEach(frac => {
+        const r_m = maxR_m * frac;
+        ctxXY.beginPath();
+        ctxXY.arc(cx, cy, r_m * pxPerM, 0, TWO_PI);
+        ctxXY.stroke();
+        ctxXY.fillStyle = "rgba(255,255,255,0.3)";
+        ctxXY.font = "9px Consolas, monospace";
+        ctxXY.fillText(`${(r_m * 100).toFixed(0)}cm`, cx + r_m * pxPerM + 3, cy - 3);
+      });
+
+      // Eixos X e Y do mundo
+      ctxXY.beginPath();
+      ctxXY.moveTo(0, cy); ctxXY.lineTo(w, cy);
+      ctxXY.moveTo(cx, 0); ctxXY.lineTo(cx, h);
+      ctxXY.stroke();
+      ctxXY.fillStyle = "#ef4444"; ctxXY.fillText("+X", w - 20, cy - 5);
+      ctxXY.fillStyle = "#10b981"; ctxXY.fillText("+Y", cx + 5, 12);
+
+      // Linha de transmissão vista de cima (se D >= 0)
+      if (activeState.D_m !== null && activeState.D_m >= 0) {
+        const lineAng = deg2rad(activeState.yaw_deg + activeState.bearing_deg);
+        const lx = Math.cos(lineAng) * 80;
+        const ly = Math.sin(lineAng) * 80;
+        const ex = cx + activeState.px * pxPerM;
+        const ey = cy - activeState.py * pxPerM;
+        ctxXY.beginPath();
+        ctxXY.strokeStyle = "#d97706";
+        ctxXY.lineWidth = 3.5;
+        ctxXY.moveTo(ex - lx, ey + ly);
+        ctxXY.lineTo(ex + lx, ey - ly);
+        ctxXY.stroke();
+      }
+
+      // Rastro XY
+      if (hist.px.length > 1) {
+        ctxXY.beginPath();
+        ctxXY.strokeStyle = "rgba(6, 182, 212, 0.55)";
+        ctxXY.lineWidth = 1.4;
+        for (let i = 0; i < hist.px.length; i++) {
+          const x = cx + hist.px[i] * pxPerM;
+          const y = cy - hist.py[i] * pxPerM;
+          if (i === 0) ctxXY.moveTo(x, y);
+          else ctxXY.lineTo(x, y);
+        }
+        ctxXY.stroke();
+      }
+
+      // Posição atual da esfera
+      const curX = cx + activeState.px * pxPerM;
+      const curY = cy - activeState.py * pxPerM;
+
+      // Seta tracejada do Heading Desejado (psi_des)
+      const psiDes = deg2rad(-activeState.yaw_des_deg);
+      ctxXY.beginPath();
+      ctxXY.setLineDash([3, 3]);
+      ctxXY.strokeStyle = "#ffffff";
+      ctxXY.lineWidth = 1.5;
+      ctxXY.moveTo(curX, curY);
+      ctxXY.lineTo(curX + 28 * Math.cos(psiDes), curY - 28 * Math.sin(psiDes));
+      ctxXY.stroke();
+      ctxXY.setLineDash([]);
+
+      // Seta sólida do Heading Real (psi)
+      const psi = deg2rad(-activeState.yaw_deg);
+      ctxXY.beginPath();
+      ctxXY.strokeStyle = "#f59e0b";
+      ctxXY.lineWidth = 2.5;
+      ctxXY.moveTo(curX, curY);
+      ctxXY.lineTo(curX + 28 * Math.cos(psi), curY - 28 * Math.sin(psi));
+      ctxXY.stroke();
+
+      // Contorno da esfera no radar
+      ctxXY.beginPath();
+      ctxXY.arc(curX, curY, Math.max(6, plant.radius * pxPerM), 0, TWO_PI);
+      ctxXY.strokeStyle = "rgba(251, 146, 60, 0.45)";
+      ctxXY.lineWidth = 1.2;
+      ctxXY.stroke();
+
+      // Ponto central da esfera
+      ctxXY.beginPath();
+      ctxXY.arc(curX, curY, 4.0, 0, TWO_PI);
+      ctxXY.fillStyle = "#06b6d4";
+      ctxXY.fill();
+      ctxXY.strokeStyle = "#ffffff";
+      ctxXY.lineWidth = 1.2;
+      ctxXY.stroke();
+
+      // Os 3 propulsores a 120° com vetores de empuxo no radar
+      const cPsiRadar = Math.cos(psi), sPsiRadar = Math.sin(psi);
+      const f_max_radar = cluster.maxThrust || 18.0;
+      for (let j = 0; j < 3; j++) {
+        const m = cluster.motors[j];
+        const mx_b = cluster.arm_radius * Math.cos(MOTOR_MOUNT_ANGLES[j]);
+        const my_b = cluster.arm_radius * Math.sin(MOTOR_MOUNT_ANGLES[j]);
+        const mx_w = cPsiRadar * mx_b - sPsiRadar * my_b;
+        const my_w = sPsiRadar * mx_b + cPsiRadar * my_b;
+        const m_px = curX + mx_w * pxPerM;
+        const m_py = curY - my_w * pxPerM;
+
+        ctxXY.beginPath();
+        ctxXY.arc(m_px, m_py, 3, 0, TWO_PI);
+        ctxXY.fillStyle = "#e2e8f0";
+        ctxXY.fill();
+
+        ctxXY.fillStyle = "rgba(255, 255, 255, 0.85)";
+        ctxXY.font = "bold 9px Consolas, monospace";
+        ctxXY.fillText(m.label.toUpperCase(), m_px + 4, m_py - 3);
+
+        const f = activeState.thrusts[j];
+        if (Math.abs(f) > 0.05) {
+          const tx_b = m.thrust_dir[0], ty_b = m.thrust_dir[1];
+          const dx_w = cPsiRadar * tx_b - sPsiRadar * ty_b;
+          const dy_w = sPsiRadar * tx_b + cPsiRadar * ty_b;
+          const sign = f >= 0 ? 1.0 : -1.0;
+          const arrowLen = 6 + 18 * (Math.abs(f) / f_max_radar);
+          ctxXY.beginPath();
+          ctxXY.strokeStyle = f >= 0 ? "#ef4444" : "#3b82f6";
+          ctxXY.lineWidth = 2.0;
+          ctxXY.moveTo(m_px, m_py);
+          ctxXY.lineTo(m_px + sign * arrowLen * dx_w, m_py - sign * arrowLen * dy_w);
+          ctxXY.stroke();
+        }
+      }
+    }
+
+    // =========================================================================
+    // 12. OS 4 GRÁFICOS TEMPORAIS DE interactive.py / twin/window.py
+    // =========================================================================
+    function drawTimeSeriesChart(canvasId, seriesList, fixedYMin = null, fixedYMax = null, refLines = []) {
+      const c = document.getElementById(canvasId);
+      const ctx = c.getContext("2d");
+      const w = c.width = c.clientWidth;
+      const h = c.height = c.clientHeight;
+      ctx.clearRect(0, 0, w, h);
+
+      const N = hist.t.length;
+      let yMin = fixedYMin, yMax = fixedYMax;
+      if (yMin === null || yMax === null) {
+        let mn = -1.0, mx = 1.0;
+        if (N > 0) {
+          mn = Infinity; mx = -Infinity;
+          for (const s of seriesList) {
+            for (let i = 0; i < N; i++) {
+              const v = s.data[i];
+              if (v < mn) mn = v;
+              if (v > mx) mx = v;
+            }
+          }
+          if (!isFinite(mn) || !isFinite(mx)) { mn = -1; mx = 1; }
+          const pad = Math.max(0.2, 0.15 * (mx - mn));
+          mn -= pad; mx += pad;
+        }
+        yMin = mn; yMax = mx;
+      }
+
+      // Grade horizontal
+      ctx.strokeStyle = "rgba(255,255,255,0.08)";
+      ctx.lineWidth = 1;
+      for (let i = 0; i <= 3; i++) {
+        const y = (h / 3) * i;
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+        const val = yMax - (i / 3) * (yMax - yMin);
+        ctx.fillStyle = "rgba(255,255,255,0.38)";
+        ctx.font = "9px Consolas, monospace";
+        ctx.fillText(val.toFixed(1), 4, Math.max(9, y - 2));
+      }
+
+      // Linha y = 0
+      if (yMin < 0 && yMax > 0) {
+        const y0 = h - ((0 - yMin) / (yMax - yMin)) * h;
+        ctx.strokeStyle = "rgba(255,255,255,0.22)";
+        ctx.beginPath(); ctx.moveTo(0, y0); ctx.lineTo(w, y0); ctx.stroke();
+      }
+
+      // Linhas de referência extras (ex.: 1500 us no PWM)
+      for (const rl of refLines) {
+        const y = h - ((rl.val - yMin) / (yMax - yMin)) * h;
+        ctx.strokeStyle = rl.color;
+        ctx.setLineDash([3, 3]);
+        ctx.beginPath(); ctx.moveTo(0, y); ctx.lineTo(w, y); ctx.stroke();
+        ctx.setLineDash([]);
+      }
+
+      if (N < 2) return;
+      const t0 = hist.t[0];
+      const t1 = Math.max(t0 + 1.0, hist.t[N - 1]);
+
+      for (const s of seriesList) {
+        ctx.strokeStyle = s.color;
+        ctx.lineWidth = s.width || 1.5;
+        ctx.setLineDash(s.dashed ? [4, 3] : []);
+        ctx.beginPath();
+        for (let i = 0; i < N; i++) {
+          const x = ((hist.t[i] - t0) / (t1 - t0)) * w;
+          const v = Math.max(yMin, Math.min(yMax, s.data[i]));
+          const y = h - ((v - yMin) / (yMax - yMin)) * h;
+          if (i === 0) ctx.moveTo(x, y);
+          else ctx.lineTo(x, y);
+        }
+        ctx.stroke();
+      }
+      ctx.setLineDash([]);
+    }
+
+    function renderAllCharts() {
+      // 1. Inclinação (theta_x, theta_y)
+      drawTimeSeriesChart("chartTilt", [
+        { data: hist.sx, color: "#38bdf8", width: 1.6 },
+        { data: hist.sy, color: "#10b981", width: 1.6 }
+      ]);
+      // 2. Velocidade (vx, vy)
+      drawTimeSeriesChart("chartVel", [
+        { data: hist.vx, color: "#38bdf8", width: 1.6 },
+        { data: hist.vy, color: "#f59e0b", width: 1.6 }
+      ]);
+      // 3. Heading (psi vs psi_des)
+      drawTimeSeriesChart("chartHeading", [
+        { data: hist.yaw, color: "#06b6d4", width: 1.8 },
+        { data: hist.yaw_des, color: "#ffffff", width: 1.2, dashed: true }
+      ], -180, 180);
+      // 4. PWM dos ESCs (990..2010 us)
+      drawTimeSeriesChart("chartPWM", [
+        { data: hist.pwm_a, color: "#ef4444", width: 1.4 },
+        { data: hist.pwm_b, color: "#10b981", width: 1.4 },
+        { data: hist.pwm_c, color: "#3b82f6", width: 1.4 }
+      ], 990, 2010, [{ val: 1500, color: "rgba(255,255,255,0.35)" }]);
+    }
+
+    // =========================================================================
+    // 13. ATUALIZAÇÃO DO HUD, BARRA DE STATUS E KPIS
+    // =========================================================================
+    function updateHUDAndKPIs() {
+      const s = activeState;
+      const tiltMag = Math.hypot(s.sx_deg, s.sy_deg);
+      const speed = Math.hypot(s.vx, s.vy, s.vz);
+
+      // Faixa de status superior
+      document.getElementById("statusTime").innerText = `t = ${s.t.toFixed(2)} s`;
+      const elXY = document.getElementById("statusXY");
+      elXY.innerText = s.xy_on ? "XY: LIGADO" : "XY: DESLIGADO";
+      elXY.style.color = s.xy_on ? "var(--green)" : "var(--red)";
+
+      const elHead = document.getElementById("statusHead");
+      elHead.innerText = s.yaw_on ? "HEADING: LIGADO" : "HEADING: DESLIGADO";
+      elHead.style.color = s.yaw_on ? "var(--green)" : "var(--red)";
+
+      const elVis = document.getElementById("statusVision");
+      elVis.innerText = s.vision_on ? `VISÃO: ON (${s.bearing_deg.toFixed(1)}°)` : "VISÃO: OFF";
+      elVis.style.color = s.vision_on ? "var(--cyan)" : "var(--text-muted)";
+
+      document.getElementById("statusPause").innerText = (modeSource === "sim" && simPaused) ? "PAUSADO" : "";
+
+      // Botões laterais sincronizados
+      const btnXY = document.getElementById("btnToggleXY");
+      btnXY.innerText = s.xy_on ? "🛡️ ANTI-BALANÇO (p): ON" : "⚪ ANTI-BALANÇO (p): OFF";
+      btnXY.className = s.xy_on ? "btn btn-success" : "btn btn-off";
+
+      const btnHead = document.getElementById("btnToggleHead");
+      btnHead.innerText = s.yaw_on ? "🧭 HEADING (y): ON" : "⚪ HEADING (y): OFF";
+      btnHead.className = s.yaw_on ? "btn btn-primary" : "btn btn-off";
+
+      // HUD 3D (mesmo formato do interactive.py + twin/window.py)
+      const dTxt = (s.D_m !== null && s.D_m >= 0) ? `${s.D_m.toFixed(2)} m` : "—";
+      const srcTxt = modeSource === "real" ? "REAL [STM32]" : `SIM [${plant.kind.toUpperCase()}]`;
+      document.getElementById("hud3D").innerText =
+        `FONTE      ${srcTxt}\n` +
+        `inclinação ${tiltMag.toFixed(2).padStart(6)}°  (sx ${s.sx_deg.toFixed(1)}°, sy${s.sy_deg.toFixed(1)}°)\n` +
+        `|v|        ${speed.toFixed(3).padStart(6)} m/s\n` +
+        `ψ          ${s.yaw_deg.toFixed(1).padStart(6)}°  (des.${s.yaw_des_deg.toFixed(1)}°)\n` +
+        `cabo L     ${s.L_m.toFixed(2).padStart(6)} m  | linha D: ${dTxt}\n` +
+        `força ext  (${s.ext_fx >= 0 ? "+" : ""}${s.ext_fx.toFixed(1)}, ${s.ext_fy >= 0 ? "+" : ""}${s.ext_fy.toFixed(1)}) N\n` +
+        `PWM (µs)   a:${s.pwm[0].toFixed(0)}  b:${s.pwm[1].toFixed(0)}  c:${s.pwm[2].toFixed(0)}` +
+        (s.F_cmd ? `\nF_cmd/Tz   (${s.F_cmd[0].toFixed(2)}, ${s.F_cmd[1].toFixed(2)}) N  Tz ${s.tz_cmd.toFixed(2)} N·m` +
+                   `\nv̂ corpo    (${s.vhat[0].toFixed(3)}, ${s.vhat[1].toFixed(3)}) m/s ${s.vel_cabo ? "[cabo+bamb.]" : (s.vel_est ? "[CG absoluto]" : "[gyro]")}` : "") +
+        (modeSource === "real" ? `\nestado     ${s.calib_ok ? "calib OK" : "SEM CALIB"}${s.mpu_fail ? " | MPU FALHA" : ""}` +
+                                 `${s.rest_plumb ? " | repouso prumo" : ""}${s.yaw_rest ? " | yaw no alvo" : ""}` : "");
+
+      // KPIs
+      document.getElementById("kpiTiltMag").innerText = tiltMag.toFixed(2);
+      document.getElementById("kpiSpeed").innerText = speed.toFixed(3);
+      document.getElementById("kpiYaw").innerText = `${s.yaw_deg.toFixed(1)}° /${s.yaw_des_deg.toFixed(0)}`;
+      document.getElementById("kpiRateZ").innerText = s.rate_z_dps.toFixed(1);
+      document.getElementById("kpiSxSy").innerText = `${s.sx_deg.toFixed(2)}° /${s.sy_deg.toFixed(2)}°`;
+      document.getElementById("kpiLD").innerText = `${s.L_m.toFixed(2)}m / ${dTxt}`;
+
+      // Barras de Motores
+      const ids = [["lblMotorA", "barMotorA"], ["lblMotorB", "barMotorB"], ["lblMotorC", "barMotorC"]];
+      for (let i = 0; i < 3; i++) {
+        const pwm = s.pwm[i];
+        const f = s.thrusts[i];
+        document.getElementById(ids[i][0]).innerText = `${pwm.toFixed(0)} µs (${f >= 0 ? "+" : ""}${f.toFixed(2)} N)`;
+        const pct = Math.max(0, Math.min(100, ((pwm - 1000) / 1000) * 100));
+        document.getElementById(ids[i][1]).style.width = `${pct}%`;
+      }
+
+      // Polia & Encoder AS5600 (3 estados vetoriais: Abrindo horário, Fechando anti-horário, Parado polia)
+      const encEst = s.enc_estado || 0;
+      const topLbl = document.getElementById("poliaTopLabel");
+      const svgAbr = document.getElementById("svgPoliaAbrindo");
+      const svgFec = document.getElementById("svgPoliaFechando");
+      const svgPar = document.getElementById("svgPoliaParado");
+
+      if (encEst < 0) {
+        topLbl.innerText = "ABRINDO";
+        topLbl.className = "polia-top-label abrindo";
+        svgAbr.style.display = "";
+        svgFec.style.display = "none";
+        svgPar.style.display = "none";
+      } else if (encEst > 0) {
+        topLbl.innerText = "FECHANDO";
+        topLbl.className = "polia-top-label fechando";
+        svgAbr.style.display = "none";
+        svgFec.style.display = "";
+        svgPar.style.display = "none";
+      } else {
+        topLbl.innerText = "PARADO";
+        topLbl.className = "polia-top-label parado";
+        svgAbr.style.display = "none";
+        svgFec.style.display = "none";
+        svgPar.style.display = "";
+      }
+
+      const voltas = isFinite(s.enc_voltas) ? Math.abs(s.enc_voltas) : 0.0;
+      const vmax = isFinite(s.enc_voltas_max) && s.enc_voltas_max > 0 ? s.enc_voltas_max : 140.0;
+      const pctPolia = isFinite(s.enc_pct) ? s.enc_pct : 0.0;
+      const pctClamped = Math.max(0, Math.min(100, pctPolia));
+      document.getElementById("lblPoliaVoltas").innerText = `${voltas.toFixed(1)} / ${vmax.toFixed(0)} v`;
+      document.getElementById("lblPoliaPct").innerText = `${pctPolia.toFixed(1)}%`;
+      document.getElementById("barPoliaPct").style.width = `${pctClamped}%`;
+
+      const badgeEnc = document.getElementById("badgeEncStatus");
+      if (modeSource === "sim") {
+        badgeEnc.innerText = "SIMULADO";
+        badgeEnc.style.color = "var(--cyan)";
+      } else if (s.enc_ok) {
+        badgeEnc.innerText = "AS5600 OK";
+        badgeEnc.style.color = "var(--green)";
+      } else {
+        badgeEnc.innerText = "SEM AS5600";
+        badgeEnc.style.color = "var(--red)";
+      }
+
+      // Ponte H2: Pinça (BTS7960) — Cadeado Travado (Baixo 's') vs Cadeado Aberto (Cima 'w')
+      const svgPincaTrav = document.getElementById("svgPincaTravada");
+      const svgPincaAber = document.getElementById("svgPincaAberta");
+      const pincaTopLbl  = document.getElementById("pincaTopLabel");
+      const pincaBotLbl  = document.getElementById("pincaBottomLabel");
+      const lblPincaEst  = document.getElementById("lblPincaEstado");
+      const lblPincaMot  = document.getElementById("lblPincaMotor");
+      const badgePinca   = document.getElementById("badgePincaLim");
+
+      if (s.pinca_locked) {
+        svgPincaTrav.style.display = "";
+        svgPincaAber.style.display = "none";
+        pincaTopLbl.innerText = "TRAVADA";
+        pincaTopLbl.className = "polia-top-label fechando";
+        pincaBotLbl.innerText = "PINÇA BAIXO";
+        lblPincaEst.innerText = "🔒 Travada (Baixo)";
+        lblPincaEst.style.color = "var(--green)";
+      } else {
+        svgPincaTrav.style.display = "none";
+        svgPincaAber.style.display = "";
+        pincaTopLbl.innerText = "ABERTA";
+        pincaTopLbl.className = "polia-top-label abrindo";
+        pincaBotLbl.innerText = "PINÇA CIMA";
+        lblPincaEst.innerText = "🔓 Aberta (Cima)";
+        lblPincaEst.style.color = "var(--cyan)";
+      }
+
+      if (s.pinca_motor === 1) {
+        lblPincaMot.innerText = "▲ SUBINDO (w)";
+        lblPincaMot.style.color = "var(--cyan)";
+      } else if (s.pinca_motor === -1) {
+        lblPincaMot.innerText = "▼ DESCENDO (s)";
+        lblPincaMot.style.color = "var(--green)";
+      } else {
+        lblPincaMot.innerText = "PARADO (x)";
+        lblPincaMot.style.color = "var(--text-muted)";
+      }
+
+      if (s.pinca_lim_cima) {
+        badgePinca.innerText = "FIM CURSO TOPO";
+        badgePinca.style.color = "var(--cyan)";
+      } else if (s.pinca_lim_baixo) {
+        badgePinca.innerText = "FIM CURSO BASE";
+        badgePinca.style.color = "var(--green)";
+      } else {
+        badgePinca.innerText = "PB14 / PB15";
+        badgePinca.style.color = "var(--text-muted)";
+      }
+    }
+
+    // Exportação CSV
+    function exportCSV() {
+      if (hist.t.length === 0) return;
+      let csv = "t_s,sx_deg,sy_deg,vx_ms,vy_ms,yaw_deg,yaw_des_deg,pwm_a,pwm_b,pwm_c,px_m,py_m,pz_m\n";
+      for (let i = 0; i < hist.t.length; i++) {
+        csv += [
+          hist.t[i].toFixed(3), hist.sx[i].toFixed(3), hist.sy[i].toFixed(3),
+          hist.vx[i].toFixed(4), hist.vy[i].toFixed(4),
+          hist.yaw[i].toFixed(2), hist.yaw_des[i].toFixed(2),
+          hist.pwm_a[i].toFixed(0), hist.pwm_b[i].toFixed(0), hist.pwm_c[i].toFixed(0),
+          hist.px[i].toFixed(4), hist.py[i].toFixed(4), hist.pz[i].toFixed(4)
+        ].join(",") + "\n";
+      }
+      const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = `esfera_v2_${modeSource}_${new Date().toISOString().slice(0,19).replace(/:/g,"-")}.csv`;
+      a.click();
+    }
+
+    function logMsg(msg) {
+      const term = document.getElementById("terminalLog");
+      const ts = new Date().toLocaleTimeString();
+      term.textContent += `\n[${ts}]${msg}`;
+      term.scrollTop = term.scrollHeight;
+    }
+    function clearLog() {
+      document.getElementById("terminalLog").textContent = "Log limpo.";
+    }
+
+    // =========================================================================
+    // 14. LOOP PRINCIPAL DE ANIMAÇÃO (60 FPS) E AUTO-CONEXÃO HTTP
+    // =========================================================================
+    let lastWall = performance.now();
+    let fpsCounter = 0;
+    let lastFpsWall = performance.now();
+
+    function mainLoop(now) {
+      const dt_wall = (now - lastWall) / 1000.0;
+      lastWall = now;
+
+      stepLocalSimulation(dt_wall);
+      render3DScene();
+      renderXYAndYawChart();
+      renderAllCharts();
+      updateHUDAndKPIs();
+
+      fpsCounter++;
+      if (now - lastFpsWall >= 1000) {
+        document.getElementById("fpsLabel").innerText = fpsCounter;
+        fpsCounter = 0;
+        lastFpsWall = now;
+      }
+      requestAnimationFrame(mainLoop);
+    }
+
+    // Inicialização
+    resetSession();
+
+    // Se o HTML foi aberto pelo servidor HTTP da Raspberry Pi (bridge.py), conecta direto ao SSE
+    if (window.location.protocol.startsWith("http")) {
+      document.getElementById("raspUrlInput").value = window.location.origin;
+      switchTab("rasp");
+      toggleRaspConnection();
+    }
+
+    requestAnimationFrame(mainLoop);
+  </script>
+</body>
+</html>

@@ -4,6 +4,9 @@ from camera_and_image_manipulation import *
 from configs import *
 from pwm_input import iniciar_pwm_control
 
+# Controle de transmissao de angulo pela visao (toggle via tecla 'v')
+visao_atualiza_angulo = True
+
 # Inicializa a Thread se houver conexão com o microcontrolador
 if arduino is not None:
     threading.Thread(target=thread_leitura_telemetria, daemon=True).start()
@@ -12,6 +15,7 @@ if arduino is not None:
 # MAIN
 # ===========================================================================
 def main():
+    global visao_atualiza_angulo
     cmtx0, dist0, cmtx1, dist1, R_rel, T_rel = load_params()
     sgbm = SGBMParams()
     left_m, right_m, wls = sgbm.build()
@@ -103,7 +107,8 @@ def main():
                 x1, y1, x2, y2 = linha
                 cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
                 cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                send_ang_serial(media_angulo)
+                if visao_atualiza_angulo:
+                    send_ang_serial(media_angulo)
 
             cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
             cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
@@ -178,7 +183,8 @@ def main():
                 cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
 
                 # Envia o ângulo processado pela câmera via cabo USB para a Black Pill
-                send_ang_serial(media_angulo)
+                if visao_atualiza_angulo:
+                    send_ang_serial(media_angulo)
 
             cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
             cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
@@ -220,7 +226,7 @@ def main():
         fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
         t_last = now
         
-        draw_mini_hud(display, fps, stats_str, stats_color)
+        draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
         cv2.imshow("Stereo Profundidade", display)
         
         k = cv2.waitKey(1) & 0xFF
@@ -284,16 +290,19 @@ def main():
             send_cmd_serial("d")
 
 
+        # -----------------------------------------------------------------
+        # PARAR GERAL (PONTES H / MOTORES) - Tecla 'p' / 'P'
+        # -----------------------------------------------------------------
         elif k in [
             ord("p"),
             ord("P")
         ]:
 
-            send_cmd_serial("c")
+            send_cmd_serial("p")
 
 
         # -----------------------------------------------------------------
-        # AS5600
+        # AS5600 - LEITURA ENCODER ('e' / 'E')
         # -----------------------------------------------------------------
         elif k in [
             ord("e"),
@@ -302,6 +311,61 @@ def main():
 
             send_cmd_serial("e")
 
+
+        # -----------------------------------------------------------------
+        # CONTROLE ANTI-BALANÇO (Ligar / Desligar Pêndulo na STM32) - Tecla 'b' / 'B'
+        # -----------------------------------------------------------------
+        elif k in [
+            ord("b"),
+            ord("B")
+        ]:
+
+            send_cmd_serial("b")
+
+
+        # -----------------------------------------------------------------
+        # CONTROLE DE YAW (Ligar / Desligar PID Yaw na STM32) - Tecla 'y' / 'Y'
+        # -----------------------------------------------------------------
+        elif k in [
+            ord("y"),
+            ord("Y")
+        ]:
+
+            send_cmd_serial("y")
+
+
+        # -----------------------------------------------------------------
+        # ATUALIZAÇÃO DE ÂNGULO PELA VISÃO (Pausar / Retomar Envio) - Tecla 'v' / 'V'
+        # -----------------------------------------------------------------
+        elif k in [
+            ord("v"),
+            ord("V")
+        ]:
+
+            visao_atualiza_angulo = not visao_atualiza_angulo
+            status_txt = "ATIVADO" if visao_atualiza_angulo else "PAUSADO"
+            print(f">> [VISAO]: Envio automatico de angulo pela visao: {status_txt}")
+
+
+        # -----------------------------------------------------------------
+        # ZERAR YAW ('0')
+        # -----------------------------------------------------------------
+        elif k in [
+            ord("0"),
+        ]:
+
+            send_cmd_serial("0")
+
+
+        # -----------------------------------------------------------------
+        # COMANDO 'm' - Tecla 'm' / 'M'
+        # -----------------------------------------------------------------
+        elif k in [
+            ord("m"),
+            ord("M")
+        ]:
+
+            send_cmd_serial("m")
 
         # -----------------------------------------------------------------
         # ESCALA
@@ -353,11 +417,11 @@ def main():
 
 
         # -----------------------------------------------------------------
-        # SGBM - BLOCO
+        # SGBM - BLOCO (Movido para 'n' / 'N' para liberar 'b' para Anti-Balanço)
         # -----------------------------------------------------------------
         elif k in [
-            ord("b"),
-            ord("B")
+            ord("n"),
+            ord("N")
         ]:
 
             sgbm.cycle_block()

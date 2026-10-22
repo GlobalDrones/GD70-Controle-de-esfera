@@ -9,13 +9,14 @@ from serial_communication import send_cmd_serial
 
 
 # ===========================================================================
-# CONFIGURAÇÃO DOS GPIOs PWM (Air Unit CH12-CH15)
+# CONFIGURAÇÃO DOS GPIOs PWM (Air Unit CH12-CH15 e opcional CH16)
 # ===========================================================================
 #
-# Air Unit CH12 -> GPIO5  -> W
-# Air Unit CH13 -> GPIO6  -> S
-# Air Unit CH14 -> GPIO13 -> A
-# Air Unit CH15 -> GPIO19 -> D
+# Air Unit CH12 -> GPIO5  -> W (Pinça Subir)
+# Air Unit CH13 -> GPIO6  -> S (Pinça Descer)
+# Air Unit CH14 -> GPIO13 -> A (Polia Horário)
+# Air Unit CH15 -> GPIO19 -> D (Polia Anti-horário)
+# Air Unit CH16 -> GPIO26 -> B (Anti-Balanço ON/OFF - Opcional)
 #
 # ATENÇÃO: GPIOs da Raspberry Pi trabalham em 3.3 V, não aplicar 5 V direto.
 # ===========================================================================
@@ -25,12 +26,18 @@ GPIO_CH13 = 6
 GPIO_CH14 = 13
 GPIO_CH15 = 19
 
+# Canal opcional do rádio para ativar/desativar Anti-Balanço
+HABILITAR_CH16_ANTI_BALANCO = False  # Mude para True se conectar o canal do rádio no GPIO26
+GPIO_CH16 = 26
+
 COMMANDS = {
     "CH12": "w",
     "CH13": "s",
     "CH14": "a",
     "CH15": "d",
 }
+if HABILITAR_CH16_ANTI_BALANCO:
+    COMMANDS["CH16"] = "b"
 
 # PWM: < 1300 us = solto | 1300-1700 us = zona morta | > 1700 us = pressionado
 BUTTON_LOW = 1100
@@ -49,6 +56,8 @@ pwm_inputs = {
     "CH14": DigitalInputDevice(GPIO_CH14, pull_up=False),
     "CH15": DigitalInputDevice(GPIO_CH15, pull_up=False),
 }
+if HABILITAR_CH16_ANTI_BALANCO:
+    pwm_inputs["CH16"] = DigitalInputDevice(GPIO_CH16, pull_up=False)
 
 pulse_start_ns = {ch: None for ch in pwm_inputs}
 pulse_width_us = {ch: 0 for ch in pwm_inputs}
@@ -152,10 +161,6 @@ def _process_ad_stop():
     if ch14_released and ch15_released:
         stop_streak += 1
         if stop_streak >= CONFIRM_READS and not ad_stop_sent:
-            print(
-                f"[PWM] CH14 = {pulse_width_us['CH14']:.0f} us + "
-                f"CH15 = {pulse_width_us['CH15']:.0f} us -> PARAR"
-            )
             send_cmd_serial("c")
             ad_stop_sent = True
     else:
@@ -174,11 +179,6 @@ def _loop_pwm():
 
 
 def iniciar_pwm_control():
-    """Inicia, em background, a leitura dos canais PWM (CH12-CH15) do
-    rádio e o envio dos comandos w/a/s/d/c pela serial já aberta em
-    serial_communication.py. Roda em paralelo ao controle por teclado,
-    ambos mandando comando pro mesmo `arduino`. Cada canal só passa a
-    aceitar pressão depois de um baseline solto confirmado, e exige
-    CONFIRM_READS leituras seguidas em zona de pressão antes de disparar
-    qualquer comando — protege contra ruído/glitch no boot/bind do rádio."""
+    """Inicia, em background, a leitura dos canais PWM do rádio e o envio dos comandos
+    pela serial já aberta em serial_communication.py. Roda em paralelo ao controle por teclado."""
     threading.Thread(target=_loop_pwm, daemon=True).start()

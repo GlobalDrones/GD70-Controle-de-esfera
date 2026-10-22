@@ -242,51 +242,77 @@ class SGBMParams:
 # ===========================================================================
 # HUD E VISUALIZACAO (DUAS LINHAS: VISÃO + TELEMETRIA MOTORES)
 # ===========================================================================
-def draw_mini_hud(frame, fps, stats_str, stats_color):
+def draw_mini_hud(frame, fps, stats_str, stats_color, visao_ativa=True):
     h, w = frame.shape[:2]
 
     # Escala baseada na altura da imagem
     s = h / 720.0
 
-    margem = max(8, int(12 * s))
-    linha1 = margem + int(18 * s)
-    linha2 = linha1 + int(28 * s)
+    margem = max(8, int(10 * s))
+    linha1 = margem + int(16 * s)
+    linha2 = linha1 + int(24 * s)
+    linha3 = linha2 + int(24 * s)
 
-    altura_hud = linha2 + margem
+    altura_hud = linha3 + margem
 
     # Fundo do HUD
-    cv2.rectangle(frame, (0, 0), (min(w, 1100), altura_hud), (0, 0, 0), -1)
+    cv2.rectangle(frame, (0, 0), (min(w, 1250), altura_hud), (0, 0, 0), -1)
 
-    fonte = max(0.35, 0.55 * s)
+    fonte = max(0.35, 0.48 * s)
     espessura = max(1, int(s))
 
-    # Linha 1
+    # Linha 1: Visao / FPS / Toggle de Envio de Angulo ('v')
+    vis_tag = "[ENVIO ANGULO ON ('v')]" if visao_ativa else "[ENVIO ANGULO PAUSADO ('v')]"
+    vis_cor = (0, 255, 200) if visao_ativa else (120, 120, 255)
     cv2.putText(
         frame,
-        f"FPS: {fps:.1f} | {stats_str}",
+        f"FPS: {fps:.1f} | {vis_tag} | {stats_str}",
         (10, linha1),
         cv2.FONT_HERSHEY_SIMPLEX,
         fonte,
-        (0, 255, 200),
+        vis_cor,
         espessura,
     )
 
-    # Linha 2
+    # Linha 2: Motores e Yaw (com status de Yaw ativo 'y')
+    yaw_on = bool(telemetria_dados.get('yaw_ativo', 1))
+    yaw_tag = "ON" if yaw_on else "OFF ('y')"
     str_motores = (
-        f"STM32 Real -> Yaw: {telemetria_dados['yaw']:+.1f}° | "
+        f"STM32 -> Yaw: {telemetria_dados['yaw']:+.1f}° [{yaw_tag}] | "
         f"GiroZ: {telemetria_dados['rate_z']:+.1f}°/s | "
-        f"PWM_BF: {telemetria_dados['pwm_bf']}us | "
-        f"PWM_AS: {telemetria_dados['pwm_as']}us | "
-        f"Erro PID: {telemetria_dados['erro']:+.1f}°"
+        f"BF: {telemetria_dados['pwm_bf']} | "
+        f"AS: {telemetria_dados['pwm_as']} | "
+        f"TR: {telemetria_dados.get('pwm_tr', 1500)} | "
+        f"Erro: {telemetria_dados['erro']:+.1f}°"
     )
-
     cv2.putText(
         frame,
         str_motores,
         (10, linha2),
         cv2.FONT_HERSHEY_SIMPLEX,
         fonte * 0.95,
-        (255, 150, 50),
+        (255, 160, 50),
+        espessura,
+    )
+
+    # Linha 3: Anti-Balanco e Fins de Curso
+    swing_on = bool(telemetria_dados.get('swing_ativo', 0))
+    status_sw = "ATIVO" if swing_on else "DESLIGADO ('b')"
+    cor_sw = (0, 255, 0) if swing_on else (100, 100, 255)
+
+    str_pendulo = (
+        f"Anti-Balanco: [{status_sw}] | "
+        f"Theta: {telemetria_dados.get('theta', 0.0):.2f}° | "
+        f"F_cmd: {telemetria_dados.get('f_swing', 0.0):.3f}N | "
+        f"FimCurso C:{int(telemetria_dados.get('fim_cima', 0))} B:{int(telemetria_dados.get('fim_baixo', 0))}"
+    )
+    cv2.putText(
+        frame,
+        str_pendulo,
+        (10, linha3),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        fonte * 0.95,
+        cor_sw,
         espessura,
     )
 

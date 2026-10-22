@@ -1,0 +1,46 @@
+{
+  "version": 1,
+  "pwm_limit_us": 450.0,
+  "swing_reserve_us": 400.0,
+  "yaw_reserve_us": 300.0,
+  "arm_radius_m": 0.7,
+  "lag_tau_s": 0.12,
+  "motors": [
+    {
+      "label": "a",
+      "thrust_dir": [
+        1.0,
+        0.0
+      ],
+      "yaw_sign": 1.0,
+      "kf_fwd": 8.148483476686283e-05,
+      "kf_rev": 4.88909008601177e-05,
+      "deadzone_us": 30.0,
+      "latch_us": 60.0
+    },
+    {
+      "label": "b",
+      "thrust_dir": [
+        -0.5,
+        0.8660254037844386
+      ],
+      "yaw_sign": 1.0,
+      "kf_fwd": 8.148483476686283e-05,
+      "kf_rev": 4.88909008601177e-05,
+      "deadzone_us": 30.0,
+      "latch_us": 60.0
+    },
+    {
+      "label": "c",
+      "thrust_dir": [
+        0.5,
+        0.8660254037844386
+      ],
+      "yaw_sign": -1.0,
+      "kf_fwd": 8.148483476686283e-05,
+      "kf_rev": 4.88909008601177e-05,
+      "deadzone_us": 30.0,
+      "latch_us": 60.0
+    }
+  ]
+}
