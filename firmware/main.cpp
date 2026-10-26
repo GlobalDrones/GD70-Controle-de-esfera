@@ -606,7 +606,7 @@ bool calibrar_mpu(bool verboso, bool forcar) {
     }
     delay(3);
   }
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW);
   if (n < 50) {
     if (verboso) Serial.println("[ERRO] Amostras insuficientes — calibracao abortada.");
     return false;
@@ -885,7 +885,7 @@ void passo_controle_yaw(float dt) {
     integral_error_yaw = 0.0f;
     last_error_yaw = pos_error_yaw;
     yaw_em_repouso = false;
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_PIN, LOW);
     return;
   }
 
@@ -903,7 +903,7 @@ void passo_controle_yaw(float dt) {
     tz_cmd = 0.0f;
     integral_error_yaw = 0.0f;
     last_error_yaw = pos_error_yaw;
-    digitalWrite(LED_PIN, HIGH);
+    digitalWrite(LED_PIN, LOW);
     return;
   }
 
@@ -1064,7 +1064,7 @@ void ativarDriver() {
 void pararBTS() {
   digitalWrite(POLIA_RPWM_PIN, LOW);
   digitalWrite(POLIA_LPWM_PIN, LOW);
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW);
   polia_em_movimento = false;
   polia_sentido = 0;
   Serial.println(">> POLIA: Motor PARADO");
@@ -1661,7 +1661,7 @@ void enviar_telemetria() {
 // =========================================================================================
 void setup() {
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, HIGH);
+  digitalWrite(LED_PIN, LOW); // Active-LOW: LED PC13 ACESO FULL
 
   esc_a.attach(BF_PIN);
   esc_b.attach(AS_PIN);
@@ -1735,6 +1735,7 @@ void setup() {
 }
 
 void loop() {
+  digitalWrite(LED_PIN, LOW); // LED PC13 sempre aceso FULL (Active-LOW)
   unsigned long now_us = micros();
   float dt = (now_us - last_time_us) * 1e-6f;
   last_time_us = now_us;
