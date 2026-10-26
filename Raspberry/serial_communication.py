@@ -1,6 +1,6 @@
 """Link com o STM (firmware v2) + ponte TCP para o twin no PC.
 
-Fluxo: reset físico (GPIO18) → busca automática na USB → thread de leitura com auto-reconexão.
+Fluxo: reset físico (GPIO18) → busca automática na USB → thread de leitura.
 Cada linha lida alimenta `telemetria_dados` (formato TEL v2, mesmas chaves de
 sempre — HUD/main.py seguem funcionando) e é retransmitida pela ponte TCP
 (``bridge.py``, porta 9999) ao twin/wizard. Comandos vindos por TCP viram
@@ -73,7 +73,7 @@ def resetar_stm32():
 
 
 # ===========================================================================
-# UART (USB) — BUSCA AUTOMÁTICA E CONEXÃO RESILIENTE
+# UART (USB) — BUSCA AUTOMÁTICA
 # ===========================================================================
 BAUDRATE = 115200
 PORTAS_TENTATIVA = [
@@ -81,39 +81,22 @@ PORTAS_TENTATIVA = [
     "/dev/ttyACM0", "/dev/ttyACM1",
 ]
 
-# Lock para sincronizar acessos concorrentes de escrita/leitura na porta serial
-arduino_lock = threading.Lock()
-arduino = None
-
-
-def conectar_serial():
-    """Tenta conectar à STM32 nas portas seriais conhecidas."""
-    for porta in PORTAS_TENTATIVA:
-        try:
-            ser = serial.Serial(porta, BAUDRATE, timeout=1, write_timeout=0.5)
-            try:
-                ser.dtr = True
-                ser.rts = True
-                ser.reset_input_buffer()
-            except Exception:
-                pass
-            print(f"[OK] Sucesso! Conectado à STM32 na porta: {porta}")
-            return ser
-        except Exception:
-            pass
-    return None
-
-
-# Executa o reset físico no boot (a menos que explicitamente desativado)
-if os.environ.get("ESFERA_NO_RESET", "0") != "1":
-    resetar_stm32()
+# Executa o reset físico ANTES de varrer as portas seriais (boot limpo do STM)
+resetar_stm32()
 
 print("[INFO] Procurando STM32 nas portas USB...")
-with arduino_lock:
-    arduino = conectar_serial()
+arduino = None
+for porta in PORTAS_TENTATIVA:
+    try:
+        arduino = serial.Serial(porta, BAUDRATE, timeout=1)
+        arduino.flush()
+        print(f"[OK] Sucesso! Conectado à STM32 na porta: {porta}")
+        break
+    except Exception:
+        pass
 
 if arduino is None:
-    print("[AVISO] STM32 não encontrada inicialmente. A thread tentará reconectar em background.")
+    print("[AVISO] STM32 não encontrada. O código vai rodar, mas sem telemetria.")
 
 # Ponte TCP/HTTP: linhas do STM vão ao twin/supervisório; comandos voltam pela serial; stream de vídeo HTTP
 bridge = Bridge(on_client_line=lambda line: send_cmd_serial(line))
@@ -124,26 +107,20 @@ def send_ang_serial(bearing, D=-1.0):
     """Envia a visão ao STM (contrato V do firmware v2): bearing COM SINAL
     (graus, no corpo) + distância D (m; -1 = sem estereoscopia). O bearing é
     o ERRO de apontamento direto — as câmeras estão fixas ao sensor."""
-    global arduino
-    if arduino is not None and getattr(arduino, "is_open", False):
+    if arduino is not None and arduino.is_open:
         bearing = max(-90.0, min(90.0, float(bearing)))
         msg = f"V{bearing:.2f} {float(D):.2f}\n"
         try:
-            with arduino_lock:
-                if arduino is not None and getattr(arduino, "is_open", False):
-                    arduino.write(msg.encode("utf-8"))
+            arduino.write(msg.encode("utf-8"))
         except Exception as e:
             print(f"[ERRO SERIAL] Falha ao enviar visão: {e}")
 
 
 def send_cmd_serial(cmd, verbose=True):
-    global arduino
-    if arduino is not None and getattr(arduino, "is_open", False):
+    if arduino is not None and arduino.is_open:
         msg = f"{cmd}\n"
         try:
-            with arduino_lock:
-                if arduino is not None and getattr(arduino, "is_open", False):
-                    arduino.write(msg.encode("utf-8"))
+            arduino.write(msg.encode("utf-8"))
             if verbose and not cmd.startswith("V"):
                 print(f"[SERIAL] Comando enviado: {cmd}")
         except Exception as e:
@@ -176,34 +153,17 @@ def processar_linha_telemetria(linha):
     bridge.broadcast(linha)
 
 
-# Loop assíncrono que consome os dados enviados pelo cabo USB da Black Pill com auto-reconexão
+# Loop assíncrono que consome os dados enviados pelo cabo USB da Black Pill
 def thread_leitura_telemetria():
-    global arduino
-    print("[OK] Thread paralela de leitura de telemetria rodando (com auto-reconexão).")
-    while True:
-        # Se desconectado, tenta reconectar sem deixar a thread morrer
-        if arduino is None or not getattr(arduino, "is_open", False):
-            time.sleep(1.0)
-            with arduino_lock:
-                arduino = conectar_serial()
-            continue
-
+    if arduino is None:
+        return
+    print("[OK] Thread paralela de leitura de telemetria rodando.")
+    while arduino.is_open:
         try:
             if arduino.in_waiting > 0:
                 linha = arduino.readline().decode("utf-8", errors="ignore").strip()
                 if linha:
                     processar_linha_telemetria(linha)
-        except (serial.SerialException, OSError) as e:
-            print(f"[AVISO SERIAL] Conexao com STM32 interrompida: {e}. Reconectando...")
-            with arduino_lock:
-                try:
-                    if arduino is not None:
-                        arduino.close()
-                except Exception:
-                    pass
-                arduino = None
-            time.sleep(1.0)
         except Exception:
             time.sleep(0.05)
-
         time.sleep(0.005)

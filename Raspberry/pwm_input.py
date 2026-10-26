@@ -106,12 +106,7 @@ def _falling_edge(channel):
         pulse_history[channel].append(width_us)
         # Mediana da janela recente, não o valor bruto — absorve leituras
         # isoladas corrompidas por atraso de callback sob carga de CPU.
-        try:
-            samples = list(pulse_history[channel])
-            if samples:
-                pulse_width_us[channel] = statistics.median(samples)
-        except Exception:
-            pass
+        pulse_width_us[channel] = statistics.median(pulse_history[channel])
 
 
 for _channel, _device in pwm_inputs.items():

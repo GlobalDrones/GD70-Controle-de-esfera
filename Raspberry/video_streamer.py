@@ -46,31 +46,27 @@ class AsyncCamera:
         self.height = height
 
         self.frame = None
-        self.frame_id = 0
-        self.new_frame_event = threading.Event()
         self.lock = threading.Lock()
 
         self.running = False
         self._cap = None
         self._thread = None
 
-        # Controle de reconexão tolerante a ruído (sem reiniciar o processo via os.execv)
+        # Controle de reconexão
         self.reconnect_delay = 1.0
-        self.consecutive_read_failures = 0
-        self.max_consecutive_failures = 30  # ~1.0-1.5s de falhas contínuas antes de recriar V4L2
+        # Após N reconexões seguidas sem frames, o processo se reinicia
+        # (os.execv): reiniciar o programa é o que comprovadamente destrava.
+        self.max_failed_reconnects = 3
+        self._failed_reconnects = 0
 
     def _open_camera(self):
-        print(f"[INFO] Conectando {self.name} ({self.src})...")
+        print(f"[INFO] Conectando {self.name}...")
 
         # Dispositivo local (/dev/...) -> V4L2 direto. Sem backend explícito o
         # OpenCV tenta o GStreamer primeiro, que sempre falha aqui.
         is_local = isinstance(self.src, int) or str(self.src).startswith("/dev/")
         backend = cv2.CAP_V4L2 if is_local else cv2.CAP_ANY
-        try:
-            cap = cv2.VideoCapture(self.src, backend)
-        except Exception as e:
-            print(f"[ERRO] Excecao ao abrir {self.src}: {e}")
-            return False
+        cap = cv2.VideoCapture(self.src, backend)
 
         if not cap.isOpened():
             cap.release()
@@ -90,19 +86,17 @@ class AsyncCamera:
         got_frame = False
         for _ in range(5):
             ret, frame = cap.read()
-            if not ret or frame is None or frame.size == 0:
-                time.sleep(0.02)
-                continue
+            if not ret:
+                break
             got_frame = True
-            break
 
         if not got_frame:
             cap.release()
-            print(f"[ERRO] {self.name} abriu mas nao entregou frames validos")
+            print(f"[ERRO] {self.name} abriu mas nao entregou frames")
             return False
 
         self._cap = cap
-        self.consecutive_read_failures = 0
+
         print(f"[OK] {self.name} conectada em background")
         return True
 
@@ -111,98 +105,96 @@ class AsyncCamera:
             return False
 
         self.running = True
+
         self._thread = threading.Thread(
             target=self._loop,
-            daemon=True,
-            name=f"cam-{self.name}"
+            daemon=True
         )
         self._thread.start()
+
         return True
 
     def _loop(self):
-        backoff = self.reconnect_delay
         while self.running:
+
             # ---------------------------------------------------------------
-            # Se não temos captura válida, tenta reconectar sem derrubar o processo
+            # Verifica se temos uma captura válida
             # ---------------------------------------------------------------
             if self._cap is None or not self._cap.isOpened():
-                if not self.running:
-                    break
-                print(f"[INFO] Tentando reconectar {self.name} (espera={backoff:.1f}s)...")
+
+                print(f"[AVISO] {self.name} desconectada.")
+                print(f"[INFO] Tentando reconectar {self.name}...")
+
                 if self._cap is not None:
-                    try:
-                        self._cap.release()
-                    except Exception:
-                        pass
+                    self._cap.release()
                     self._cap = None
 
-                time.sleep(backoff)
+                time.sleep(self.reconnect_delay)
+
                 if not self.running:
                     break
 
                 if self._open_camera():
-                    print(f"[OK] {self.name} reconectada com sucesso!")
-                    backoff = self.reconnect_delay
+                    print(f"[OK] {self.name} reconectada!")
                 else:
-                    backoff = min(backoff * 1.5, 5.0)  # maximo 5s de backoff
+                    self._failed_reconnects += 1
+                    if self._failed_reconnects >= self.max_failed_reconnects:
+                        self._restart_process()
+                    time.sleep(self.reconnect_delay)
+
                 continue
 
             # ---------------------------------------------------------------
-            # Captura o frame
+            # Tenta capturar frame
             # ---------------------------------------------------------------
-            try:
-                ret, frame = self._cap.read()
-            except Exception as e:
-                ret = False
-                frame = None
+            ret, frame = self._cap.read()
 
             if ret and frame is not None and frame.size > 0:
+
                 with self.lock:
                     self.frame = frame
-                    self.frame_id += 1
-                self.new_frame_event.set()
-                self.consecutive_read_failures = 0
-            else:
-                self.consecutive_read_failures += 1
-                # Só reinicia o driver V4L2 se falhar por muitos frames contínuos (~1.5s)
-                # Falhas isoladas de 1-2 frames causadas por jitter ou ruído de motor são toleradas.
-                if self.consecutive_read_failures >= self.max_consecutive_failures:
-                    print(f"[AVISO] Falha persistente ao ler {self.name} ({self.consecutive_read_failures} frames sem sinal). Reabrindo dispositivo...")
-                    try:
-                        self._cap.release()
-                    except Exception:
-                        pass
-                    self._cap = None
-                    with self.lock:
-                        self.frame = None
-                    self.consecutive_read_failures = 0
-                    time.sleep(self.reconnect_delay)
-                else:
-                    time.sleep(0.005)
+                self._failed_reconnects = 0
 
-    def read(self, wait_new=False, timeout=0.05):
-        """Retorna uma cópia do frame. Se wait_new=True, aguarda a chegada de um novo frame físico."""
-        if wait_new and self.running:
-            self.new_frame_event.wait(timeout=timeout)
+            else:
+
+                # -----------------------------------------------------------
+                # A câmera provavelmente caiu.
+                #
+                # Libera o VideoCapture para que uma nova instância possa
+                # ser criada quando o dispositivo USB voltar.
+                # -----------------------------------------------------------
+                print(f"[AVISO] Falha ao ler {self.name}. Reconectando...")
+
+                self._cap.release()
+                self._cap = None
+
+                with self.lock:
+                    self.frame = None
+
+                time.sleep(self.reconnect_delay)
+
+    def _restart_process(self):
+        print(f"[ERRO] {self.name} travada apos {self._failed_reconnects} "
+              f"reconexoes. Reiniciando o processo...", flush=True)
+        if self._cap is not None:
+            self._cap.release()
+            self._cap = None
+        sys.stdout.flush()
+        sys.stderr.flush()
+        os.execv(sys.executable, [sys.executable] + sys.argv)
+
+    def read(self):
         with self.lock:
-            if self.frame is None:
-                return None
-            frame_copy = self.frame.copy()
-            self.new_frame_event.clear()
-            return frame_copy
+            return self.frame.copy() if self.frame is not None else None
 
     def stop(self):
         self.running = False
-        self.new_frame_event.set()
 
-        if self._thread is not None and threading.current_thread() != self._thread:
+        if self._thread is not None:
             self._thread.join(timeout=1.0)
 
         if self._cap is not None:
-            try:
-                self._cap.release()
-            except Exception:
-                pass
+            self._cap.release()
             self._cap = None
 
         with self.lock:
