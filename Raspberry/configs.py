@@ -15,8 +15,9 @@ from collections import defaultdict
 # ===========================================================================
 #CAM0_ID = "rtsp://192.168.144.25:8554/main.264"  # camera esquerda
 #CAM1_ID = "rtsp://192.168.144.2:8554/main.264"   # camera direita
-CAM0_ID = "/dev/video0"#"/dev/camera_esquerda"
-CAM1_ID = "/dev/video2"#"/dev/camera_direita"
+# Auto-seleciona symlinks estáveis udev se existirem; fallback para /dev/video*
+CAM0_ID = "/dev/camera_esquerda" if os.path.exists("/dev/camera_esquerda") else "/dev/video0"
+CAM1_ID = "/dev/camera_direita" if os.path.exists("/dev/camera_direita") else "/dev/video2"
 FRAME_W = 1280
 FRAME_H = 720
 
@@ -33,7 +34,7 @@ GUI_ENABLED = (os.environ.get("ESFERA_GUI", "1" if _has_display else "0") != "0"
 GUI_MAX_FPS = float(os.environ.get("ESFERA_GUI_FPS", "10"))
 GUI_SCALE = float(os.environ.get("ESFERA_GUI_SCALE", "0.6"))
 
-cv2.setNumThreads(4)
+cv2.setNumThreads(int(os.environ.get("ESFERA_CV_THREADS", "2")))
 
 # ===========================================================================
 # MATRIZES HARDCODED (DADOS REAIS DA CALIBRACAO)
