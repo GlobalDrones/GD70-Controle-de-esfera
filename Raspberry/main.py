@@ -6,7 +6,7 @@ from pwm_input import iniciar_pwm_control
 
 # Teclas que vao direto ao STM (a tecla e o proprio comando — docs/COMANDOS.md).
 # 'm' (teste de motores, bloqueia ~18 s) fica de fora de proposito: so pelo supervisorio.
-TECLAS_STM = set("wsxadcekypzt0")
+TECLAS_STM = set("wsxadcekypzt0F")
 
 # Controle de transmissao de angulo pela visao (toggle via tecla 'v')
 visao_atualiza_angulo = True
@@ -84,258 +84,274 @@ def main():
     
     iniciar_pwm_control()
 
-    while True:
-        stats_str = "NUVEM CENTRAL -> Sem dados validos na area"
-        stats_color = (255, 255, 0)
+    try:
+        while True:
+            stats_str = "NUVEM CENTRAL -> Sem dados validos na area"
+            stats_color = (255, 255, 0)
 
-        if modo_mono:
-            # -------------------------------------------------------------
-            # MODO MONO: só uma camera ativa, sem rectify/SGBM/profundidade
-            # -------------------------------------------------------------
-            f0 = cam_ativa.read()
-            if f0 is None:
-                time.sleep(0.005)
-                continue
-            escala = SCALES[scale_key]
-            out_size = (max(2, int(FRAME_W * escala)), max(2, int(FRAME_H * escala)))
-            if (f0.shape[1], f0.shape[0]) != out_size:
-                f0 = cv2.resize(f0, out_size)
-            rect_l = f0
+            if modo_mono:
+                # -------------------------------------------------------------
+                # MODO MONO: só uma camera ativa, sem rectify/SGBM/profundidade
+                # -------------------------------------------------------------
+                f0 = cam_ativa.read(wait_new=True, timeout=0.05)
+                if f0 is None:
+                    time.sleep(0.005)
+                    continue
+                escala = SCALES[scale_key]
+                out_size = (max(2, int(FRAME_W * escala)), max(2, int(FRAME_H * escala)))
+                if (f0.shape[1], f0.shape[0]) != out_size:
+                    f0 = cv2.resize(f0, out_size)
+                rect_l = f0
 
-            hough_vis = rect_l.copy()
-            cx, cy = out_size[0] // 2, out_size[1] // 2
-            roi_radius = int(160 * escala)
+                hough_vis = rect_l.copy()
+                cx, cy = out_size[0] // 2, out_size[1] // 2
+                roi_radius = int(160 * escala)
 
-            angulo, linha, dist_alvo, roi_bin = detectar_linha_mono(
-                rect_l, cx, cy, roi_radius
-            )
-            bin_vis = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
-            if angulo is not None:
-                historico_angulos.append(angulo)
-                media_angulo = int(sum(historico_angulos) / len(historico_angulos))
-                stats_str = f"ALVO FIXADO (MONO) -> Bearing: {angulo:+.1f} deg | Med: {media_angulo:+.1f} deg (sem D)"
-                stats_color = (0, 255, 0)
-                x1, y1, x2, y2 = linha
-                cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                if visao_atualiza_angulo:
-                    send_ang_serial(media_angulo, -1.0)  # mono: sem estereoscopia
+                angulo, linha, dist_alvo, roi_bin = detectar_linha_mono(
+                    rect_l, cx, cy, roi_radius
+                )
+                bin_vis = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
+                if angulo is not None:
+                    historico_angulos.append(angulo)
+                    media_angulo = int(sum(historico_angulos) / len(historico_angulos))
+                    stats_str = f"ALVO FIXADO (MONO) -> Bearing: {angulo:+.1f} deg | Med: {media_angulo:+.1f} deg (sem D)"
+                    stats_color = (0, 255, 0)
+                    x1, y1, x2, y2 = linha
+                    cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    if visao_atualiza_angulo:
+                        send_ang_serial(media_angulo, -1.0)  # mono: sem estereoscopia
 
-            cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
-            cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
+                cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
+                cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
 
-            cv2.putText(hough_vis, f"Cam {cam_ativa.name} (MONO)", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.putText(bin_vis, "Binarizacao", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(hough_vis, f"Cam {cam_ativa.name} (MONO)", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                cv2.putText(bin_vis, "Binarizacao", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # Só duas colunas (sem painel de profundidade, que exige as duas cameras)
-            display = cv2.hconcat([hough_vis, bin_vis])
+                # Só duas colunas (sem painel de profundidade, que exige as duas cameras)
+                display = cv2.hconcat([hough_vis, bin_vis])
 
-        else:
-            # -------------------------------------------------------------
-            # MODO ESTEREO: pipeline original, sem alteracoes
-            # -------------------------------------------------------------
-            f0 = cam0.read()
-            f1 = cam1.read()
-            if f0 is None or f1 is None:
-                time.sleep(0.005)
-                continue
-            data = scale_mgr.get()
-            out_size = data["size"]
-            map1x, map1y, map2x, map2y, Q, focal, baseline = data["maps"]
-            if (f0.shape[1], f0.shape[0]) != out_size:
-                f0 = cv2.resize(f0, out_size)
-            if (f1.shape[1], f1.shape[0]) != out_size:
-                f1 = cv2.resize(f1, out_size)
-            rect_l = cv2.remap(f0, map1x, map1y, cv2.INTER_LINEAR)
-            rect_r = cv2.remap(f1, map2x, map2y, cv2.INTER_LINEAR)
-            gl = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
-            gr = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
-            dl = left_m.compute(gl, gr)
-            if use_wls:
-                dr = right_m.compute(gr, gl)
-                disp = wls.filter(dl, rect_l, None, dr).astype(np.float32) / 16.0
             else:
-                disp = dl.astype(np.float32) / 16.0
-            mask = disp > sgbm.min_disp
-            valid_disp = disp[mask]
-            if len(valid_disp) > 0:
-                min_d_clip = np.percentile(valid_disp, 2)
-                max_d_clip = np.percentile(valid_disp, 98)
-                disp_clipped = np.clip(disp, min_d_clip, max_d_clip)
-            else:
-                disp_clipped = disp
-            disp_norm = cv2.normalize(disp_clipped, None, 0, 255, cv2.NORM_MINMAX)
-            if gray_disp:
-                disp_vis = cv2.cvtColor(np.uint8(disp_norm), cv2.COLOR_GRAY2BGR)
-            else:
-                disp_vis = cv2.applyColorMap(np.uint8(disp_norm), cv2.COLORMAP_JET)
-            disp_vis[~mask] = 0
+                # -------------------------------------------------------------
+                # MODO ESTEREO: pipeline original, sem alteracoes
+                # -------------------------------------------------------------
+                f0 = cam0.read(wait_new=True, timeout=0.05)
+                f1 = cam1.read(wait_new=False)
+                if f0 is None or f1 is None:
+                    time.sleep(0.005)
+                    continue
+                data = scale_mgr.get()
+                out_size = data["size"]
+                map1x, map1y, map2x, map2y, Q, focal, baseline = data["maps"]
+                if (f0.shape[1], f0.shape[0]) != out_size:
+                    f0 = cv2.resize(f0, out_size)
+                if (f1.shape[1], f1.shape[0]) != out_size:
+                    f1 = cv2.resize(f1, out_size)
+                rect_l = cv2.remap(f0, map1x, map1y, cv2.INTER_LINEAR)
+                rect_r = cv2.remap(f1, map2x, map2y, cv2.INTER_LINEAR)
+                gl = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY)
+                gr = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY)
+                dl = left_m.compute(gl, gr)
+                if use_wls:
+                    dr = right_m.compute(gr, gl)
+                    disp = wls.filter(dl, rect_l, None, dr).astype(np.float32) / 16.0
+                else:
+                    disp = dl.astype(np.float32) / 16.0
+                mask = disp > sgbm.min_disp
+                valid_disp = disp[mask]
+                if len(valid_disp) > 0:
+                    min_d_clip = np.percentile(valid_disp, 2)
+                    max_d_clip = np.percentile(valid_disp, 98)
+                    disp_clipped = np.clip(disp, min_d_clip, max_d_clip)
+                else:
+                    disp_clipped = disp
+                disp_norm = cv2.normalize(disp_clipped, None, 0, 255, cv2.NORM_MINMAX)
+                if gray_disp:
+                    disp_vis = cv2.cvtColor(np.uint8(disp_norm), cv2.COLOR_GRAY2BGR)
+                else:
+                    disp_vis = cv2.applyColorMap(np.uint8(disp_norm), cv2.COLORMAP_JET)
+                disp_vis[~mask] = 0
 
-            hough_vis = rect_l.copy()
-            cx, cy = out_size[0] // 2, out_size[1] // 2
-            roi_radius = int(160 * SCALES[scale_key])
+                hough_vis = rect_l.copy()
+                cx, cy = out_size[0] // 2, out_size[1] // 2
+                roi_radius = int(160 * SCALES[scale_key])
 
-            angulo, linha, dist_alvo, roi_bin = detectar_linha_mais_proxima(
-                rect_l, disp, focal, baseline, cx, cy, roi_radius
-            )
+                angulo, linha, dist_alvo, roi_bin = detectar_linha_mais_proxima(
+                    rect_l, disp, focal, baseline, cx, cy, roi_radius
+                )
 
-            bin_vis = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
-            if angulo is not None:
-                historico_angulos.append(angulo)
-                media_angulo = int(sum(historico_angulos) / len(historico_angulos))
-                stats_str = f"ALVO FIXADO -> D: {dist_alvo:.2f}m | Bearing: {angulo:+.1f} deg | Med: {media_angulo:+.1f} deg"
-                stats_color = (0, 255, 0)
-                x1, y1, x2, y2 = linha
+                bin_vis = cv2.cvtColor(roi_bin, cv2.COLOR_GRAY2BGR)
+                if angulo is not None:
+                    historico_angulos.append(angulo)
+                    media_angulo = int(sum(historico_angulos) / len(historico_angulos))
+                    stats_str = f"ALVO FIXADO -> D: {dist_alvo:.2f}m | Bearing: {angulo:+.1f} deg | Med: {media_angulo:+.1f} deg"
+                    stats_color = (0, 255, 0)
+                    x1, y1, x2, y2 = linha
 
-                cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
-                cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    cv2.line(disp_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    cv2.line(hough_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
+                    cv2.line(bin_vis, (x1, y1), (x2, y2), (0, 255, 0), 3)
 
-                # Envia a visão (bearing com sinal + distância) pela USB para
-                # a Black Pill — contrato V do firmware v2
-                if visao_atualiza_angulo:
-                    send_ang_serial(media_angulo, dist_alvo)
+                    # Envia a visão (bearing com sinal + distância) pela USB para
+                    # a Black Pill — contrato V do firmware v2
+                    if visao_atualiza_angulo:
+                        send_ang_serial(media_angulo, dist_alvo)
 
-            cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
-            cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
-            cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
+                cv2.circle(disp_vis, (cx, cy), roi_radius, (255, 255, 255), 1)
+                cv2.circle(hough_vis, (cx, cy), roi_radius, (0, 255, 255), 2)
+                cv2.circle(bin_vis, (cx, cy), roi_radius, (0, 255, 255), 1)
 
-            step = int(35 * SCALES[scale_key])
-            for dy in range(-roi_radius + 15, roi_radius, step):
-                for dx in range(-roi_radius + 15, roi_radius, step):
-                    if dx**2 + dy**2 <= (roi_radius - 10) ** 2:
-                        px, py = cx + dx, cy + dy
-                        if mask[py, px] and disp[py, px] > 0:
-                            d = (focal * baseline) / disp[py, px]
-                            cv2.circle(disp_vis, (px, py), 2, (0, 255, 0), -1)
-                            cv2.putText(
-                                disp_vis,
-                                f"{d:.1f}",
-                                (px + 4, py - 4),
-                                cv2.FONT_HERSHEY_SIMPLEX,
-                                0.4,
-                                (255, 255, 255),
-                                1,
-                            )
+                step = int(35 * SCALES[scale_key])
+                for dy in range(-roi_radius + 15, roi_radius, step):
+                    for dx in range(-roi_radius + 15, roi_radius, step):
+                        if dx**2 + dy**2 <= (roi_radius - 10) ** 2:
+                            px, py = cx + dx, cy + dy
+                            if 0 <= py < disp.shape[0] and 0 <= px < disp.shape[1] and mask[py, px] and disp[py, px] > 0:
+                                d = (focal * baseline) / disp[py, px]
+                                cv2.circle(disp_vis, (px, py), 2, (0, 255, 0), -1)
+                                cv2.putText(
+                                    disp_vis,
+                                    f"{d:.1f}",
+                                    (px + 4, py - 4),
+                                    cv2.FONT_HERSHEY_SIMPLEX,
+                                    0.4,
+                                    (255, 255, 255),
+                                    1,
+                                )
 
-            cv2.putText(hough_vis, "Cam Esquerda", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
-            cv2.putText(bin_vis, "Binarizacao", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
-            cv2.putText(disp_vis, "Profundidade", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(hough_vis, "Cam Esquerda", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (0, 255, 255), 2)
+                cv2.putText(bin_vis, "Binarizacao", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
+                cv2.putText(disp_vis, "Profundidade", (10, out_size[1] - 20), cv2.FONT_HERSHEY_SIMPLEX, 0.6, (255, 255, 255), 2)
 
-            # Junta as três matrizes redimensionadas horizontalmente (Lado a Lado)
-            display = cv2.hconcat([hough_vis, bin_vis, disp_vis])
+                # Junta as três matrizes redimensionadas horizontalmente (Lado a Lado)
+                display = cv2.hconcat([hough_vis, bin_vis, disp_vis])
         
-        # Se usar o streamer do FFmpeg ativo, envie os bytes aqui:
-        # try:
-        #     streamer.stdin.write(display.tobytes())
-        # except Exception as e:
-        #     escala_atual = SCALES[scale_key]
-        #     streamer = iniciar_streamer(FRAME_W, FRAME_H, escala_atual)
+            # Se usar o streamer do FFmpeg ativo, envie os bytes aqui:
+            # try:
+            #     streamer.stdin.write(display.tobytes())
+            # except Exception as e:
+            #     escala_atual = SCALES[scale_key]
+            #     streamer = iniciar_streamer(FRAME_W, FRAME_H, escala_atual)
             
-        now = time.time()
-        fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
-        t_last = now
+            now = time.time()
+            fps = 0.9 * fps + 0.1 / max(now - t_last, 1e-6)
+            t_last = now
 
-        # Desenha HUD com FPS, status e angulo diretamente no frame
-        draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
+            # Desenha HUD com FPS, status e angulo diretamente no frame
+            draw_mini_hud(display, fps, stats_str, stats_color, visao_atualiza_angulo)
 
-        # Transmite o quadro via HTTP MJPEG para o navegador do PC (:8080/api/video) e para o futuro APK
-        bridge.update_frame(display)
+            # Transmite o quadro via HTTP MJPEG para o navegador do PC (:8080/api/video) e para o futuro APK
+            bridge.update_frame(display)
 
-        # Atualiza a janela local so se GUI_ENABLED for True (dispensavel se visualizar pelo PC/navegador)
-        k = -1
-        if GUI_ENABLED:
-            if (now - t_gui_last) >= gui_period:
-                t_gui_last = now
-                disp_local = display
-                if GUI_SCALE != 1.0:
-                    disp_local = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
-                                            interpolation=cv2.INTER_AREA)
-                try:
-                    cv2.imshow("Stereo Profundidade", disp_local)
-                except Exception as e:
-                    print(f"[AVISO] Nao foi possivel abrir janela OpenCV: {e}. Desativando GUI local.")
-                    GUI_ENABLED = False
+            # Atualiza a janela local so se GUI_ENABLED for True (dispensavel se visualizar pelo PC/navegador)
+            k = -1
             if GUI_ENABLED:
-                try:
-                    k = cv2.waitKey(1) & 0xFF
-                except Exception:
-                    k = -1
-        else:
-            time.sleep(0.001)
+                if (now - t_gui_last) >= gui_period:
+                    t_gui_last = now
+                    disp_local = display
+                    if GUI_SCALE != 1.0:
+                        disp_local = cv2.resize(display, None, fx=GUI_SCALE, fy=GUI_SCALE,
+                                                interpolation=cv2.INTER_AREA)
+                    try:
+                        cv2.imshow("Stereo Profundidade", disp_local)
+                    except Exception as e:
+                        print(f"[AVISO] Nao foi possivel abrir janela OpenCV: {e}. Desativando GUI local.")
+                        GUI_ENABLED = False
+                if GUI_ENABLED:
+                    try:
+                        k = cv2.waitKey(1) & 0xFF
+                    except Exception:
+                        k = -1
+            else:
+                time.sleep(0.001)
 
-        if k == -1 or k == 255:
-            continue
-        ch = chr(k) if k < 128 else ""
+            if k == -1 or k == 255:
+                continue
+            ch = chr(k) if k < 128 else ""
 
-        # -----------------------------------------------------------------
-        # Teclado (tabela unica em docs/COMANDOS.md):
-        #  - teclas do STM: a tecla E o comando (w envia "w", k envia "k"...),
-        #    igual ao supervisorio, ao twin e ao radio;
-        #  - teclas locais (visao/SGBM) usam simbolos/letras que NAO sao comando
-        #    do STM, para nunca haver duas acoes na mesma tecla.
-        # -----------------------------------------------------------------
-        if k in (ord("q"), 27):
-            break
+            # -----------------------------------------------------------------
+            # Teclado (tabela unica em docs/COMANDOS.md):
+            #  - teclas do STM: a tecla E o comando (w envia "w", k envia "k"...),
+            #    igual ao supervisorio, ao twin e ao radio;
+            #  - teclas locais (visao/SGBM) usam simbolos/letras que NAO sao comando
+            #    do STM, para nunca haver duas acoes na mesma tecla.
+            # -----------------------------------------------------------------
+            if k in (ord("q"), 27):
+                break
 
-        elif ch in TECLAS_STM:
-            send_cmd_serial(ch)
+            elif ch in TECLAS_STM:
+                send_cmd_serial(ch)
 
-        elif ch == "v":
-            visao_atualiza_angulo = not visao_atualiza_angulo
-            status_txt = "ATIVADO" if visao_atualiza_angulo else "PAUSADO"
-            print(f">> [VISAO]: Envio automatico de angulo pela visao: {status_txt}")
+            elif ch == "v":
+                visao_atualiza_angulo = not visao_atualiza_angulo
+                status_txt = "ATIVADO" if visao_atualiza_angulo else "PAUSADO"
+                print(f">> [VISAO]: Envio automatico de angulo pela visao: {status_txt}")
 
-        elif ch == "f":                       # filtro WLS (antes 'w', que e a pinca)
-            use_wls = not use_wls
-            print(f">> [SGBM]: WLS {'ligado' if use_wls else 'desligado'}")
+            elif ch == "f":                       # filtro WLS (antes 'w', que e a pinca)
+                use_wls = not use_wls
+                print(f">> [SGBM]: WLS {'ligado' if use_wls else 'desligado'}")
 
-        elif k in SCALES:
-            scale_key = k
-            if scale_mgr is not None:         # modo mono nao tem escala (RP-06)
-                scale_mgr.set(SCALES[k])
+            elif k in SCALES:
+                scale_key = k
+                if scale_mgr is not None:         # modo mono nao tem escala (RP-06)
+                    scale_mgr.set(SCALES[k])
 
-        elif ch in ("+", "="):
-            sgbm.inc_disp()
-            left_m, right_m, wls = sgbm.build()
+            elif ch in ("+", "="):
+                sgbm.inc_disp()
+                left_m, right_m, wls = sgbm.build()
 
-        elif ch == "-":
-            sgbm.dec_disp()
-            left_m, right_m, wls = sgbm.build()
+            elif ch == "-":
+                sgbm.dec_disp()
+                left_m, right_m, wls = sgbm.build()
 
-        elif ch == ">":                       # min_disp + (antes 'A', parecido com 'a' = polia)
-            sgbm.inc_min_disp()
-            left_m, right_m, wls = sgbm.build()
+            elif ch == ">":                       # min_disp + (antes 'A', parecido com 'a' = polia)
+                sgbm.inc_min_disp()
+                left_m, right_m, wls = sgbm.build()
 
-        elif ch == "<":                       # min_disp - (antes 'S', parecido com 's' = pinca)
-            sgbm.dec_min_disp()
-            left_m, right_m, wls = sgbm.build()
+            elif ch == "<":                       # min_disp - (antes 'S', parecido com 's' = pinca)
+                sgbm.dec_min_disp()
+                left_m, right_m, wls = sgbm.build()
 
-        elif ch == "n":
-            sgbm.cycle_block()
-            left_m, right_m, wls = sgbm.build()
+            elif ch == "n":
+                sgbm.cycle_block()
+                left_m, right_m, wls = sgbm.build()
 
-        elif ch == "r":
-            sgbm.reset()
-            left_m, right_m, wls = sgbm.build()
+            elif ch == "r":
+                sgbm.reset()
+                left_m, right_m, wls = sgbm.build()
 
-        elif ch == "!":                       # reset FISICO do STM (GPIO18) — antes 'R',
-            resetar_stm32()                   # que no STM e "ler ganhos"
+            elif ch == "!":                       # reset FISICO do STM (GPIO18) — antes 'R',
+                resetar_stm32()                   # que no STM e "ler ganhos"
 
-    # Se usar o streamer, fecha os descritores de pipe ao sair
-    # streamer.stdin.close()
-    # streamer.wait()
+        # Se usar o streamer, fecha os descritores de pipe ao sair
+        # streamer.stdin.close()
+        # streamer.wait()
     
-    cam0.stop()
-    cam1.stop()
-    if arduino is not None:
-        arduino.close()
-    if GUI_ENABLED:
+    except KeyboardInterrupt:
+        print('\n[INFO] Interrupcao pelo operador (Ctrl+C).')
+    except Exception as exc:
+        print(f'\n[ERRO CRITICO]: {exc}', file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+    finally:
+        print('[INFO] Encerrando com seguranca (enviando parada geral)...')
         try:
-            cv2.destroyAllWindows()
+            send_cmd_serial('k')
         except Exception:
             pass
-    print("[OK] Encerrado graciosamente")
-
+        cam0.stop()
+        cam1.stop()
+        if arduino is not None:
+            try:
+                arduino.close()
+            except Exception:
+                pass
+        bridge.stop()
+        if GUI_ENABLED:
+            try:
+                cv2.destroyAllWindows()
+            except Exception:
+                pass
+        print('[OK] Encerrado graciosamente')
 if __name__ == "__main__":
     main()
