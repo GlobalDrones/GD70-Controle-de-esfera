@@ -122,6 +122,8 @@ def _make_http_handler(bridge):
                 return
 
             if parsed.path in ("/api/video", "/video", "/stream.mjpg"):
+                with bridge._video_client_lock:
+                    bridge._video_client_count += 1
                 self.send_response(200)
                 self.send_header("Content-Type", "multipart/x-mixed-replace; boundary=frame")
                 self.send_header("Cache-Control", "no-cache, no-store, must-revalidate")
@@ -148,9 +150,13 @@ def _make_http_handler(bridge):
                         time.sleep(0.04)  # ~25 FPS max
                 except Exception:
                     pass
+                finally:
+                    with bridge._video_client_lock:
+                        bridge._video_client_count = max(0, bridge._video_client_count - 1)
                 return
 
             if parsed.path in ("/api/snapshot", "/snapshot.jpg"):
+                bridge._last_snapshot_req = time.monotonic()
                 jpeg_bytes = None
                 with bridge._frame_lock:
                     jpeg_bytes = bridge.last_frame_jpeg
@@ -199,6 +205,10 @@ class Bridge:
         self.last_frame_jpeg = None
         self._frame_lock = threading.Lock()
         self._frame_id = 0
+        self._video_client_count = 0
+        self._video_client_lock = threading.Lock()
+        self._last_encode_time = 0.0
+        self._last_snapshot_req = 0.0
 
     def update_frame(self, frame_bgr_or_jpeg, quality: int = 70) -> None:
         """Atualiza o último quadro da câmera para streaming HTTP/MJPEG."""
@@ -209,6 +219,15 @@ class Bridge:
                 self.last_frame_jpeg = bytes(frame_bgr_or_jpeg)
                 self._frame_id += 1
             return
+
+        now = time.monotonic()
+        with self._video_client_lock:
+            active_clients = self._video_client_count
+        if active_clients <= 0 and (now - self._last_snapshot_req > 5.0):
+            return
+        if now - self._last_encode_time < 0.033:
+            return
+        self._last_encode_time = now
 
         try:
             import cv2
