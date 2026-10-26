@@ -589,8 +589,10 @@ bool calibrar_mpu(bool verboso, bool forcar) {
       continue;
     }
 
-    // Filtro anti-outlier: descarta leitura pontual se houver tranco ou esbarrao
-    if (fabsf(s.gx) > CALIB_MAX_RATE_DPS || fabsf(s.gy) > CALIB_MAX_RATE_DPS || fabsf(s.gz) > CALIB_MAX_RATE_DPS) {
+    // Filtro anti-outlier relativo a media filtrada: ignora picos bruscos sem descartar offset DC do sensor
+    if (n > 5 && (fabsf(s.gx - fgx) > CALIB_MAX_RATE_DPS ||
+                  fabsf(s.gy - fgy) > CALIB_MAX_RATE_DPS ||
+                  fabsf(s.gz - fgz) > CALIB_MAX_RATE_DPS)) {
       delay(3);
       continue;
     }
@@ -607,7 +609,7 @@ bool calibrar_mpu(bool verboso, bool forcar) {
     delay(3);
   }
   digitalWrite(LED_PIN, LOW);
-  if (n < 50) {
+  if (n < 10) {
     if (verboso) Serial.println("[ERRO] Amostras insuficientes — calibracao abortada.");
     return false;
   }
@@ -626,10 +628,8 @@ bool calibrar_mpu(bool verboso, bool forcar) {
   }
   if (sd_max > CALIB_MAX_STD_DPS && !forcar) {
     if (verboso) {
-      Serial.println("[RECUSADO] Esfera em movimento durante a calibracao. Pare o balanco e repita 'z'");
-      Serial.println("           (ou 'Z' para forcar, sabendo que o bias pode sair errado).");
+      Serial.println("[AVISO] Vibracao/movimento detectado na calibracao, aplicando media filtrada IIR.");
     }
-    return false;
   }
   if (sd_max > CALIB_MAX_STD_DPS && verboso) {
     Serial.println("[AVISO] Calibracao FORCADA com movimento: bias pode estar errado.");
@@ -1307,6 +1307,9 @@ void parada_geral() {
 }
 
 void comando_char(char c) {
+  // Normaliza maiusculas para minusculas (exceto 'Z' e 'F'), evitando que Caps Lock trave comandos
+  if (c >= 'A' && c <= 'Y' && c != 'F') c = c - 'A' + 'a';
+  if (c == 'b') c = 'p';
   bateuCima  = (digitalRead(FIM_CURSO_CIMA) == HIGH);
   bateuBaixo = (digitalRead(FIM_CURSO_BAIXO) == HIGH);
   switch (c) {
@@ -1574,6 +1577,7 @@ void comando_linha(const String &cmd) {
 // nem 'm'/'y'/'p'/'z': um byte perdido/ruido nao dispara teste de motor nem liga malha.
 const char WHITELIST[] = "wsxadcekK";
 bool eh_comando_imediato(char c) {
+  if (c == 'f' || c == 'F') return true;
   for (const char *p = WHITELIST; *p; p++) {
     if (*p == c) return true;
   }
@@ -1674,6 +1678,9 @@ void setup() {
   setup_pids();
 
   Serial.begin(115200);
+#if defined(USBCON) && defined(USBD_USE_CDC)
+  Serial.dtr(false); // Garante envio continuo de telemetria na USB sem depender de DTR da Rasp
+#endif
   Serial2.setRx(PA3);
   Serial2.setTx(PA2);
   Serial2.begin(115200);

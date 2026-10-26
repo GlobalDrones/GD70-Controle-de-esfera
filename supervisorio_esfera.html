@@ -2211,7 +2211,8 @@
     function isReal() { return modeSource === "real"; }
 
     function toggleXYLoop() {
-      if (isReal()) { sendRawCmd("p"); return; }
+      sendRawCmd("p");
+      if (isReal()) return;
       controller.xy_enabled = !controller.xy_enabled;
       if (controller.xy_enabled) {
         controller.pid_vx.reset();
@@ -2220,7 +2221,8 @@
     }
 
     function toggleHeadingLoop() {
-      if (isReal()) { sendRawCmd("y"); return; }
+      sendRawCmd("y");
+      if (isReal()) return;
       controller.heading_enabled = !controller.heading_enabled;
       if (controller.heading_enabled) {
         controller.pid_heading_rate.reset();
@@ -2365,9 +2367,8 @@
       } else if (cmd === "x") {
         activeState.pinca_motor = 0;
       }
-      if (isReal()) {
-        sendRawCmd(cmd);
-      } else {
+      sendRawCmd(cmd);
+      if (!isReal()) {
         // No simulador, simula parada no fim de curso após 0.8 s
         if (cmd === "w" || cmd === "s") {
           setTimeout(() => { activeState.pinca_motor = 0; }, 800);
@@ -2378,12 +2379,10 @@
     function startPoliaHold(cmd) {
       stopPoliaHold(false);
       poliaHoldDir = (cmd === "a") ? -1 : 1; // a = Abrir (-1), d = Fechar (+1)
-      if (isReal()) {
+      sendRawCmd(cmd);
+      poliaHoldTimer = setInterval(() => {
         sendRawCmd(cmd);
-        poliaHoldTimer = setInterval(() => {
-          if (isReal()) sendRawCmd(cmd);
-        }, 100); // alimenta o watchdog de 250 ms da polia no STM32
-      }
+      }, 100); // alimenta o watchdog de 250 ms da polia no STM32
     }
 
     function stopPoliaHold(forceStopCmd = false) {
@@ -2393,7 +2392,7 @@
         poliaHoldTimer = null;
       }
       poliaHoldDir = 0;
-      if (isReal() && (wasMoving || forceStopCmd)) {
+      if (wasMoving || forceStopCmd) {
         sendRawCmd("c");
       }
     }
@@ -2429,15 +2428,16 @@
         return;
       }
       const k = e.key;
+      const kl = k.toLowerCase();
       if (k === "," || k === ".") {             // torque externo (só simulador)
         heldKeys.add(k);
-      } else if (k === "k" || k === "K") {
+      } else if (kl === "k") {
         sendKillSwitch();
-      } else if (k === "f" || k === "F") {
+      } else if (kl === "f") {
         sendCorteEmergencia();
-      } else if (k === "p") {
+      } else if (kl === "p" || kl === "b") {
         toggleXYLoop();
-      } else if (k === "y") {
+      } else if (kl === "y") {
         toggleHeadingLoop();
       } else if (k === "[") {
         stepHeading(-15.0);
@@ -2445,14 +2445,13 @@
         stepHeading(15.0);
       } else if (k === "0") {
         zeroHeading();
-      } else if (k === "w" || k === "s" || k === "x") {
-        cmdPinca(k);
-      } else if (TECLAS_STM_DIRETAS.has(k)) {
-        if (k === "a" || k === "d") heldKeys.add(k);
-        if (k === "c") { heldKeys.delete("a"); heldKeys.delete("d"); stopPoliaHold(false); }
-        if (isReal()) sendRawCmd(k);
-        else if (k !== "a" && k !== "d" && k !== "c") logMsg(`Tecla '${k}' é comando do STM — sem efeito no simulador.`);
-      } else if (k === "r") {
+      } else if (kl === "w" || kl === "s" || kl === "x") {
+        cmdPinca(kl);
+      } else if (TECLAS_STM_DIRETAS.has(kl)) {
+        if (kl === "a" || kl === "d") heldKeys.add(kl);
+        if (kl === "c") { heldKeys.delete("a"); heldKeys.delete("d"); stopPoliaHold(false); }
+        sendRawCmd(k === "Z" ? "Z" : kl);
+      } else if (kl === "r") {
         if (!isReal()) resetSession();
       } else if (k === " ") {
         e.preventDefault();

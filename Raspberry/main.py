@@ -11,9 +11,8 @@ TECLAS_STM = set("wsxadcekypzt0F")
 # Controle de transmissao de angulo pela visao (toggle via tecla 'v')
 visao_atualiza_angulo = True
 
-# Inicializa a Thread se houver conexão com o microcontrolador
-if arduino is not None:
-    threading.Thread(target=thread_leitura_telemetria, daemon=True).start()
+# Inicializa a Thread de telemetria sempre (auto-reconecta se a STM32 entrar depois)
+threading.Thread(target=thread_leitura_telemetria, daemon=True).start()
 
 # ===========================================================================
 # MAIN
@@ -279,8 +278,9 @@ def main():
             if k in (ord("q"), 27):
                 break
 
-            elif ch in TECLAS_STM:
-                send_cmd_serial(ch)
+            elif ch in TECLAS_STM or ch.lower() in TECLAS_STM or ch in ("f", "F"):
+                cmd_out = "F" if ch in ("f", "F") else (ch if ch in TECLAS_STM else ch.lower())
+                send_cmd_serial(cmd_out)
 
             elif ch == "v":
                 visao_atualiza_angulo = not visao_atualiza_angulo

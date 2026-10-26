@@ -90,8 +90,10 @@ def conectar_serial():
     """Tenta conectar à STM32 nas portas seriais conhecidas."""
     for porta in PORTAS_TENTATIVA:
         try:
-            ser = serial.Serial(porta, BAUDRATE, timeout=1, write_timeout=0.05)
+            ser = serial.Serial(porta, BAUDRATE, timeout=1, write_timeout=0.5)
             try:
+                ser.dtr = True
+                ser.rts = True
                 ser.reset_input_buffer()
             except Exception:
                 pass
