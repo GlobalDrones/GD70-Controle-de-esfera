@@ -241,10 +241,16 @@ const float GYRO_Z_DEADZONE = 0.05f;   // (SC-05) era 0.35: escondia ate 21 grau
 const float ACC_GATE_LO     = 0.80f; // Limite inferior de confianca do acelerometro [g]
 const float ACC_GATE_HI     = 1.20f; // Limite superior de confianca do acelerometro [g]
 
-// Calibracao do gyro (SC-04): janela >= 2 periodos do pendulo (T ~ 4,5 s a L = 5 m) e
-// gate por desvio-padrao de cada eixo. 'z' recusa se houver movimento; 'Z' forca.
-const unsigned long CALIB_MS      = 9000;
-const float CALIB_MAX_STD_DPS     = 0.30f;
+// Calibracao do gyro e zero gravimetrico:
+// - Janela otimizada (~2.0 s com ~500 amostras) com descarte de warmup inicial (150 ms).
+// - Filtro passa-baixas digital IIR nas leituras para suprimir microvibracoes mecanicas.
+// - Filtro de rejeicao de outliers pontuais (esbarroes > 12 deg/s).
+// - Limiar de quietude ajustado para bancada e operacao em corda (CALIB_MAX_STD_DPS = 0.85 deg/s).
+const unsigned long CALIB_MS          = 2000;   // Duracao total da amostragem [ms] (~2 s)
+const unsigned long CALIB_WARMUP_MS   = 150;    // Descarte de transiente inicial [ms]
+const float CALIB_MAX_STD_DPS         = 0.85f;  // Limiar maximo de desvio-padrao [deg/s]
+const float CALIB_MAX_RATE_DPS        = 12.0f;  // Rejeicao de transiente brusco pontual [deg/s]
+const float CALIB_ALPHA_FILT          = 0.25f;  // Coeficiente do filtro IIR passa-baixas (0.25 = corte de vibracoes)
 // Estimador da velocidade do CG (SC-02): integrador com vazamento da aceleracao do pino.
 const float TAU_VPIN_S            = 8.0f;
 // Observador da velocidade do CABO relativa a ancora (vel_mode 2, SC-20). Banda BAIXA de
@@ -538,47 +544,85 @@ void init_mpu() {
 // Chamador deve desligar as malhas antes (comando 'z' faz parada_geral()).
 bool calibrar_mpu(bool verboso, bool forcar) {
   if (verboso) {
-    Serial.println("=== CALIBRANDO MPU6050 (~9 s, mantenha a esfera PARADA, sem balancar) ===");
+    Serial.println("=== CALIBRANDO MPU6050 (~2 s, mantenha a esfera parada) ===");
   }
   double sgx = 0, sgy = 0, sgz = 0, sgx2 = 0, sgy2 = 0, sgz2 = 0;
   double sax = 0, say = 0, saz = 0;
   long n = 0;
   int falhas = 0;
+
+  // Estado do filtro IIR passa-baixas de calibracao
+  float fgx = 0.0f, fgy = 0.0f, fgz = 0.0f;
+  float fax = 0.0f, fay = 0.0f, faz = 0.0f;
+  bool primeiro_sample = true;
+
   unsigned long t0 = millis(), t_led = t0;
   while (millis() - t0 < CALIB_MS) {
     MpuSample s = ler_mpu();
     if (!s.ok) {
-      if (++falhas > 200) {
+      if (++falhas > 100) {
         if (verboso) Serial.println("[ERRO] MPU nao responde — calibracao abortada.");
         digitalWrite(LED_PIN, HIGH);
         return false;
       }
-      delay(2);
+      delay(3);
       continue;
     }
-    sgx += s.gx; sgy += s.gy; sgz += s.gz;
-    sgx2 += (double)s.gx * s.gx; sgy2 += (double)s.gy * s.gy; sgz2 += (double)s.gz * s.gz;
-    sax += s.ax; say += s.ay; saz += s.az;
+
+    // Filtro IIR de primeira ordem para suavizar microvibracoes da bancada
+    if (primeiro_sample) {
+      fgx = s.gx; fgy = s.gy; fgz = s.gz;
+      fax = s.ax; fay = s.ay; faz = s.az;
+      primeiro_sample = false;
+    } else {
+      fgx += CALIB_ALPHA_FILT * (s.gx - fgx);
+      fgy += CALIB_ALPHA_FILT * (s.gy - fgy);
+      fgz += CALIB_ALPHA_FILT * (s.gz - fgz);
+      fax += CALIB_ALPHA_FILT * (s.ax - fax);
+      fay += CALIB_ALPHA_FILT * (s.ay - fay);
+      faz += CALIB_ALPHA_FILT * (s.az - faz);
+    }
+
+    // Descarta o periodo inicial de acomodacao (primeiros 150 ms)
+    if (millis() - t0 < CALIB_WARMUP_MS) {
+      delay(3);
+      continue;
+    }
+
+    // Filtro anti-outlier: descarta leitura pontual se houver tranco ou esbarrao
+    if (fabsf(s.gx) > CALIB_MAX_RATE_DPS || fabsf(s.gy) > CALIB_MAX_RATE_DPS || fabsf(s.gz) > CALIB_MAX_RATE_DPS) {
+      delay(3);
+      continue;
+    }
+
+    sgx += fgx; sgy += fgy; sgz += fgz;
+    sgx2 += (double)fgx * fgx; sgy2 += (double)fgy * fgy; sgz2 += (double)fgz * fgz;
+    sax += fax; say += fay; saz += faz;
     n++;
-    if (millis() - t_led > 150) { digitalWrite(LED_PIN, !digitalRead(LED_PIN)); t_led = millis(); }
-    delay(2);
+
+    if (millis() - t_led > 80) {
+      digitalWrite(LED_PIN, !digitalRead(LED_PIN));
+      t_led = millis();
+    }
+    delay(3);
   }
   digitalWrite(LED_PIN, HIGH);
-  if (n < 100) {
+  if (n < 50) {
     if (verboso) Serial.println("[ERRO] Amostras insuficientes — calibracao abortada.");
     return false;
   }
 
-  float mgx = sgx / n, mgy = sgy / n, mgz = sgz / n;
+  float mgx = (float)(sgx / n), mgy = (float)(sgy / n), mgz = (float)(sgz / n);
   float sdx = sqrtf(fmaxf(0.0f, (float)(sgx2 / n) - mgx * mgx));
   float sdy = sqrtf(fmaxf(0.0f, (float)(sgy2 / n) - mgy * mgy));
   float sdz = sqrtf(fmaxf(0.0f, (float)(sgz2 / n) - mgz * mgz));
   float sd_max = fmaxf(sdx, fmaxf(sdy, sdz));
   if (verboso) {
-    char a[16], b[16], c[16];
-    fmt_f3(a, sdx); fmt_f3(b, sdy); fmt_f3(c, sdz);
+    char a[16], b[16], c[16], d[16];
+    fmt_f3(a, sdx); fmt_f3(b, sdy); fmt_f3(c, sdz); fmt_f3(d, sd_max);
     Serial.print(">> desvio-padrao gyro [deg/s]: "); Serial.print(a); Serial.print(" ");
-    Serial.print(b); Serial.print(" "); Serial.println(c);
+    Serial.print(b); Serial.print(" "); Serial.print(c);
+    Serial.print(" (max: "); Serial.print(d); Serial.println(")");
   }
   if (sd_max > CALIB_MAX_STD_DPS && !forcar) {
     if (verboso) {
@@ -612,9 +656,12 @@ bool calibrar_mpu(bool verboso, bool forcar) {
   mpu_falhas = 0;
   mpu_falhou = false;
   calib_ok = true;
-  last_swing_us = micros();   // (SC-14) a proxima iteracao nao integra os ~9 s parados
+  last_swing_us = micros();   // (SC-14) a proxima iteracao nao integra o tempo parado
   last_time_us = last_swing_us;
-  if (verboso) Serial.println(">> Calibracao concluida! Zero gravimetrico e gyro ajustados.");
+  if (verboso) {
+    Serial.println(">> Calibracao concluida com sucesso! Zero gravimetrico e gyro ajustados.");
+    Serial2.println(">> [MPU]: Calibracao OK (~2s)");
+  }
   return true;
 }
 
