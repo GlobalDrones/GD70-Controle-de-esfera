@@ -83,6 +83,12 @@
 #define SENSOR_OLHAL_D0 PA5
 #define SENSOR_OLHAL_A0 PA6
 
+// Modulo de Energia Hex Cube Pixhawk 2 (Bateria 3S LiPo, 5.3-40V, 30A)
+// Pino 4 (Voltage Sense / VOLT) -> PA2 (A2 - ADC1_IN2)
+// Pino 3 (Current Sense / CURR) -> PA3 (A3 - ADC1_IN3)
+#define PIN_BATT_VOLT PA2
+#define PIN_BATT_CURR PA3
+
 // Barramento I2C1 (AS5600 + MPU6050)
 #define AS5600_SDA PB9
 #define AS5600_SCL PB8
@@ -376,6 +382,44 @@ bool cruzamento_armado = false;
 
 unsigned long last_time_us = 0, last_swing_us = 0, last_telemetry_ms = 0;
 int esc_us_atual[3] = {ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL};
+
+// --- Monitoramento de Bateria 3S LiPo (Hex Cube Pixhawk 2 Power Module 30A) ---
+// Pino 4 (VOLT) em PA2 (ADC1_IN2): divisor ~10.1:1 (ex: 12.6V -> ~1.247V no pino)
+// Pino 3 (CURR) em PA3 (ADC1_IN3): ~18.0 A/V (Nota: modelo Mini pode nao variar com carga)
+const float ADC_VREF_VOLTS     = 3.30f;    // Tensao de referencia ADC do STM32 [V]
+const float ADC_MAX_COUNTS     = 4095.0f;  // Resolucao 12 bits (0..4095)
+float batt_volt_divider        = 10.10f;   // Multiplicador de tensao [V_batt / V_adc]
+float batt_amps_per_volt       = 18.00f;   // Sensibilidade de corrente [A / V_adc]
+float batt_curr_offset_v       = 0.00f;    // Offset em 0A [V]
+const float ALPHA_BATT_FILT    = 0.18f;    // Filtro IIR passa-baixas @ 25 Hz
+float v_batt_est               = 0.0f;     // Tensao filtrada da bateria 3S [V]
+float i_batt_est               = 0.0f;     // Corrente filtrada da bateria [A]
+bool  batt_init                = false;
+
+void atualizarLeituraBateria() {
+  long soma_v = 0, soma_i = 0;
+  for (int k = 0; k < 4; k++) {
+    soma_v += analogRead(PIN_BATT_VOLT);
+    soma_i += analogRead(PIN_BATT_CURR);
+  }
+  float raw_v = soma_v * 0.25f;
+  float raw_i = soma_i * 0.25f;
+
+  float v_pin_volt = (raw_v / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
+  float v_pin_curr = (raw_i / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
+
+  float v_inst = fmaxf(0.0f, v_pin_volt * batt_volt_divider);
+  float i_inst = fmaxf(0.0f, (v_pin_curr - batt_curr_offset_v) * batt_amps_per_volt);
+
+  if (!batt_init) {
+    v_batt_est = v_inst;
+    i_batt_est = i_inst;
+    batt_init = true;
+  } else {
+    v_batt_est = ALPHA_BATT_FILT * v_inst + (1.0f - ALPHA_BATT_FILT) * v_batt_est;
+    i_batt_est = ALPHA_BATT_FILT * i_inst + (1.0f - ALPHA_BATT_FILT) * i_batt_est;
+  }
+}
 
 // =========================================================================================
 // --- FUNCOES UTILITARIAS ---
@@ -1183,7 +1227,6 @@ void testarIdentificacaoMotores() {
   Serial.println("\n==========================================================");
   Serial.println("  TESTE E IDENTIFICACAO DOS 3 MOTORES                      ");
   Serial.println("==========================================================");
-  Serial2.println("[TESTE_MOTORES]: Iniciando sequencia...");
   escrever_escs(ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL);
   delay(1000);
 
@@ -1218,11 +1261,10 @@ void testarIdentificacaoMotores() {
   last_time_us = micros();
   last_swing_us = micros();
   Serial.println("  TESTE CONCLUIDO!\n");
-  Serial2.println("[TESTE_MOTORES]: Concluido!");
 }
 
 // =========================================================================================
-// --- PARSER DE COMANDOS SERIAL (USB E SERIAL2 UNIFICADOS) ---
+// --- PARSER DE COMANDOS SERIAL (USB) ---
 // =========================================================================================
 const char *GAIN_NAMES[N_GAINS] = {
   "vel_kp", "vel_ki", "vel_kd", "yaw_kp", "yaw_ki",
@@ -1255,7 +1297,6 @@ bool ler_float(const String &txt, float &out) {
 
 void eco(const String &msg) {
   Serial.println(msg);
-  Serial2.println(msg);
 }
 
 void set_gains_from_struct() {
@@ -1281,7 +1322,6 @@ void parada_geral() {
   pararBTS();
   pararMotor();
   Serial.println(">> [STM]: PARADA GERAL (loops off + ESCs neutro + mecanismos)");
-  Serial2.println(">> [STM]: PARADA GERAL");
 }
 
 void comando_char(char c) {
@@ -1301,6 +1341,20 @@ void comando_char(char c) {
     case 'd': girarSentidoD(); break;
     case 'c': pararBTS(); break;
     case 'e': lerEncoderAS5600(); break;
+    case 'b': case 'B': {
+      atualizarLeituraBateria();
+      int adc_v = analogRead(PIN_BATT_VOLT);
+      int adc_i = analogRead(PIN_BATT_CURR);
+      float vp_v = (adc_v / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
+      float vp_i = (adc_i / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
+      Serial.print(">> [BATERIA 3S] Tensao: "); Serial.print(v_batt_est, 2);
+      Serial.print(" V | Corrente: "); Serial.print(i_batt_est, 2);
+      Serial.print(" A | PA2(VOLT)="); Serial.print(vp_v, 3);
+      Serial.print("V (ADC="); Serial.print(adc_v);
+      Serial.print(") | PA3(CURR)="); Serial.print(vp_i, 3);
+      Serial.print("V (ADC="); Serial.print(adc_i); Serial.println(")");
+      break;
+    }
     case 'm': testarIdentificacaoMotores(); break;
     case 'y':
       if (!yaw_ativo && (!calib_ok || mpu_falhou)) {   // (FW-18)
@@ -1309,7 +1363,6 @@ void comando_char(char c) {
       }
       yaw_ativo = !yaw_ativo;
       Serial.println(yaw_ativo ? ">> [YAW]: ATIVADO" : ">> [YAW]: DESATIVADO");
-      Serial2.println(yaw_ativo ? ">> [YAW]: ATIVADO" : ">> [YAW]: DESATIVADO");
       if (!yaw_ativo) {
         integral_error_yaw = 0.0f;
         tz_cmd = 0.0f;
@@ -1324,7 +1377,6 @@ void comando_char(char c) {
       anti_balanco_ativo = !anti_balanco_ativo;
       Serial.println(anti_balanco_ativo ? ">> [PENDULO]: ANTI-BALANCO ATIVADO"
                                         : ">> [PENDULO]: ANTI-BALANCO DESATIVADO");
-      Serial2.println(anti_balanco_ativo ? ">> [PENDULO]: ATIVADO" : ">> [PENDULO]: DESATIVADO");
       if (!anti_balanco_ativo) {
         F_cmd_x = F_cmd_y = 0.0f;
         pid_vx.reset();
@@ -1361,7 +1413,6 @@ void comando_char(char c) {
       desired_yaw = 0.0f;
       integral_error_yaw = 0.0f;
       Serial.println(">> [YAW]: desired_yaw = 0");
-      Serial2.println(">> [YAW]: desired_yaw = 0");
       break;
   }
 }
@@ -1381,6 +1432,24 @@ void comando_linha(const String &cmd) {
       Serial.print(">> [PENDULO]: L = "); Serial.print(L_M, 2); Serial.println(" m");
     } else {
       Serial.println("[ERRO]: L fora da faixa (0.5 a 6.0 m).");
+    }
+    return;
+  }
+
+  // B<tensao_real>: calibra divisor de tensao da bateria 3S a partir da leitura de um multimetro
+  if ((cmd[0] == 'B' || cmd[0] == 'b') && cmd.length() > 1) {
+    float v_real = NAN;
+    if (ler_float(cmd.substring(1), v_real) && v_real >= 5.0f && v_real <= 30.0f) {
+      int adc_v = analogRead(PIN_BATT_VOLT);
+      float v_pin = (adc_v / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
+      if (v_pin > 0.15f) {
+        batt_volt_divider = v_real / v_pin;
+        v_batt_est = v_real;
+        char b[16]; fmt_f2(b, batt_volt_divider);
+        eco(String(">> [BATERIA 3S]: Calibrada p/ ") + String(v_real, 2) + " V (divisor=" + b + ")");
+      } else {
+        eco("[ERRO]: Tensao no pino PA2 muito baixa (< 0.15V) para calibrar.");
+      }
     }
     return;
   }
@@ -1431,7 +1500,6 @@ void comando_linha(const String &cmd) {
     for (int i = 0; i < N_GAINS; i++) {
       String s = "GAIN," + String(i) + "," + GAIN_NAMES[i] + "," + String(*gain_ptr(i), 4);
       Serial.println(s);
-      Serial2.println(s);
     }
     return;
   }
@@ -1538,7 +1606,6 @@ void comando_linha(const String &cmd) {
     yaw_em_repouso = false;
     String msg = ">> NOVO ANGULO APLICADO: " + String(desired_yaw, 2);
     Serial.println(msg);
-    Serial2.println(msg);
     return;
   }
 
@@ -1558,8 +1625,8 @@ bool eh_comando_imediato(char c) {
   return false;
 }
 
-String bufUSB = "", bufS2 = "";
-bool descartUSB = false, descartS2 = false;
+String bufUSB = "";
+bool descartUSB = false;
 void processar_serial(Stream &porta, String &buf, bool &descartando) {
   while (porta.available() > 0) {
     char c = porta.read();
@@ -1601,7 +1668,7 @@ void enviar_telemetria() {
                    (bateuCima ? 4096 : 0) |
                    (bateuBaixo ? 8192 : 0);
 
-  char line[320], num[16];
+  char line[350], num[16];
   int n = snprintf(line, sizeof(line), "TEL,%lu,", millis());
   fmt_f2(num, yaw_gyro);                               n += snprintf(line + n, sizeof(line) - n, "%s,", num);
   fmt_f2(num, vision_fresh() ? vision_bearing : 0.0f); n += snprintf(line + n, sizeof(line) - n, "%s,", num);
@@ -1628,10 +1695,12 @@ void enviar_telemetria() {
   n += snprintf(line + n, sizeof(line) - n, ",%d", enc_conectado ? 1 : 0);
   fmt_f2(num, enc_voltas); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
   fmt_f2(num, enc_pct);    n += snprintf(line + n, sizeof(line) - n, ",%s", num);
-  snprintf(line + n, sizeof(line) - n, ",%d", enc_estado);
+  n += snprintf(line + n, sizeof(line) - n, ",%d", enc_estado);
+  // Campos 26..27 (Modulo de Energia Pixhawk 2 - Bateria 3S LiPo): tensao [V] e corrente [A]
+  fmt_f2(num, v_batt_est); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
+  fmt_f2(num, i_batt_est); snprintf(line + n, sizeof(line) - n, ",%s", num);
 
   Serial.println(line);
-  Serial2.println(line);
 }
 
 // =========================================================================================
@@ -1652,9 +1721,15 @@ void setup() {
   setup_pids();
 
   Serial.begin(115200);
-  Serial2.setRx(PA3);
-  Serial2.setTx(PA2);
-  Serial2.begin(115200);
+
+  // Entradas Analogicas 12 bits para o Modulo de Energia Pixhawk 2 (Bateria 3S LiPo)
+  // PA2 (A2) = Pino 4 (VOLT) | PA3 (A3) = Pino 3 (CURR)
+  analogReadResolution(12);
+  pinMode(PIN_BATT_VOLT, INPUT_ANALOG);
+  pinMode(PIN_BATT_CURR, INPUT_ANALOG);
+  pinMode(PA8, INPUT); // Alta impedancia por seguranca
+  pinMode(PA9, INPUT);
+  atualizarLeituraBateria();
 
   destravar_barramento_I2C();
   Wire.setSCL(AS5600_SCL);
@@ -1705,6 +1780,7 @@ void setup() {
   Serial.println("  MALHAS:  y=heading on/off | p=anti-balanco on/off       ");
   Serial.println("  YAW:     <graus>=degrau relativo | 0=zera setpoint      ");
   Serial.println("  MPU:     z=calibra (recusa movimento) | Z=forca         ");
+  Serial.println("  BATERIA: b=leitura 3S (PA2=VOLT, PA3=CURR) | B<V>=calib ");
   Serial.println("  OUTROS:  e=AS5600 | E0=zera voltas | E<v>=100% | t=L    ");
   Serial.println("  LINHAS:  G<i> <v> | R | V<b> <D> [ms] | W.. | M..       ");
   Serial.println("  CORTE:   F=corte de emergencia (servo PB3 180 deg)      ");
@@ -1719,7 +1795,6 @@ void loop() {
   if (dt <= 1e-6f || dt > 0.5f) dt = 0.005f;
 
   processar_serial(Serial, bufUSB, descartUSB);
-  processar_serial(Serial2, bufS2, descartS2);
 
   // Retorno automatico do Servo de Corte de Emergencia (100% nao bloqueante)
   atualizar_servo_corte();
@@ -1787,11 +1862,12 @@ void loop() {
     }
   }
 
-  // --- Telemetria e Leitura do AS5600 a 25 Hz (fora da malha de 200 Hz) ---
+  // --- Telemetria, AS5600 e Leitura da Bateria 3S a 25 Hz (fora da malha de 200 Hz) ---
   if (millis() - last_telemetry_ms >= TELEMETRY_INTERVAL) {
     float dt_tel = (millis() - last_telemetry_ms) * 1e-3f;
     last_telemetry_ms = millis();
     atualizarEncoderAS5600(dt_tel);
+    atualizarLeituraBateria();
     enviar_telemetria();
   }
 

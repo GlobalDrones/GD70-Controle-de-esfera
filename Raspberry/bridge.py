@@ -61,8 +61,14 @@ class _ThreadingHTTPServer(ThreadingHTTPServer):
 
 def _make_http_handler(bridge):
     serve_dir = _REPO_ROOT
-    if not os.path.exists(os.path.join(_REPO_ROOT, "supervisorio_esfera.html")):
-        if os.path.exists(os.path.join(_PARENT_ROOT, "supervisorio_esfera.html")):
+    if not (
+        os.path.exists(os.path.join(_REPO_ROOT, "supervisorio_esfera_unirc7_sem_3d.html"))
+        or os.path.exists(os.path.join(_REPO_ROOT, "supervisorio_esfera.html"))
+    ):
+        if (
+            os.path.exists(os.path.join(_PARENT_ROOT, "supervisorio_esfera_unirc7_sem_3d.html"))
+            or os.path.exists(os.path.join(_PARENT_ROOT, "supervisorio_esfera.html"))
+        ):
             serve_dir = _PARENT_ROOT
 
     class _HTTPHandler(SimpleHTTPRequestHandler):
@@ -166,7 +172,10 @@ def _make_http_handler(bridge):
                 return
 
             if parsed.path in ("/", "/index.html"):
-                self.path = "/supervisorio_esfera.html"
+                if os.path.exists(os.path.join(serve_dir, "supervisorio_esfera_unirc7_sem_3d.html")):
+                    self.path = "/supervisorio_esfera_unirc7_sem_3d.html"
+                else:
+                    self.path = "/supervisorio_esfera.html"
 
             return super().do_GET()
 

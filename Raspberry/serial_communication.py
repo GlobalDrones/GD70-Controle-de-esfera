@@ -52,6 +52,8 @@ telemetria_dados = {
     "L": 1.0,
     "swing_ativo": 0,
     "yaw_ativo": 0,
+    "v_batt": 0.0,      # Tensão da bateria 3S [V] (Pino 4 VOLT -> PA2)
+    "i_batt": 0.0,      # Corrente da bateria [A] (Pino 3 CURR -> PA3)
 }
 
 
@@ -150,6 +152,10 @@ def processar_linha_telemetria(linha):
         d["L"] = frame.L_m
         d["swing_ativo"] = 1 if frame.swing_on else 0
         d["yaw_ativo"] = 1 if frame.yaw_on else 0
+        if frame.v_batt is not None:
+            d["v_batt"] = frame.v_batt
+        if frame.i_batt is not None:
+            d["i_batt"] = frame.i_batt
         erro = (frame.yaw_deg - frame.yaw_des_deg + 180.0) % 360.0 - 180.0
         d["erro"] = erro
     elif isinstance(frame, tuple):  # GAIN,idx,nome,valor (resposta ao 'R')

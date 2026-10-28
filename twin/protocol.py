@@ -73,6 +73,9 @@ class TelemetryFrame:
     enc_voltas: Optional[float] = None
     enc_pct: Optional[float] = None
     enc_estado: Optional[int] = None
+    # Módulo de Energia Pixhawk 2 - Bateria 3S LiPo (campos 26..27, opcionais)
+    v_batt: Optional[float] = None
+    i_batt: Optional[float] = None
 
     @property
     def yaw_on(self) -> bool:
@@ -102,14 +105,19 @@ def parse_line(line: str):
         return None
     if line.startswith("TEL,"):
         parts = line.split(",")
-        if len(parts) not in (16, 21, 25):
+        if len(parts) not in (16, 21, 25, 27):
             return None
         try:
             extra = [float(p) for p in parts[16:21]] if len(parts) >= 21 else [None] * 5
             enc = (
                 [int(parts[21]), float(parts[22]), float(parts[23]), int(parts[24])]
-                if len(parts) == 25
+                if len(parts) >= 25
                 else [None] * 4
+            )
+            batt = (
+                [float(parts[25]), float(parts[26])]
+                if len(parts) >= 27
+                else [None, None]
             )
             return TelemetryFrame(
                 t_ms=float(parts[1]),
@@ -128,6 +136,7 @@ def parse_line(line: str):
                 F_cmd_x=extra[0], F_cmd_y=extra[1], tz_cmd=extra[2],
                 vhat_x=extra[3], vhat_y=extra[4],
                 enc_ok=enc[0], enc_voltas=enc[1], enc_pct=enc[2], enc_estado=enc[3],
+                v_batt=batt[0], i_batt=batt[1],
             )
         except ValueError:
             return None
