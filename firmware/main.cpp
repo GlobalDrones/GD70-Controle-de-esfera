@@ -83,9 +83,15 @@
 #define SENSOR_OLHAL_D0 PA5
 #define SENSOR_OLHAL_A0 PA6
 
-// Modulo de Energia Hex Cube Pixhawk 2 (Bateria 3S LiPo: PA2=VOLT, PA3=CURR)
-#define PIN_BATT_VOLT PA2
-#define PIN_BATT_CURR PA3
+// Power Module Hex Cube Pixhawk 2 (3S-6S, 30A, 5.3-40V -> 5.3V/2.5A)
+// Conector DF13 6 pinos: Pin 1,2 = VCC 5.3V | Pin 3 = CURR (PA3/A3) | Pin 4 = VOLT (PA2/A2) | Pin 5,6 = GND
+#define BAT_VOLT_PIN    PA2
+#define BAT_CURR_PIN    PA3
+const float BAT_ADC_REF_V      = 3.3f;
+const float BAT_ADC_MAX        = 4095.0f;
+const float BAT_VOLT_MULT      = 10.10f; // Divisor padrao Pixhawk Power Module (~99 mV/V -> 10.1 V/V)
+const float BAT_AMP_PER_VOLT   = 17.00f; // Sensibilidade padrao Pixhawk 30A/60A (~17.0 A/V)
+const float BAT_CURR_OFFSET_V  = 0.0f;   // Offset em 0 A [V]
 
 // Barramento I2C1 (AS5600 + MPU6050)
 #define AS5600_SDA PB9
@@ -349,7 +355,7 @@ unsigned long vision_last_ms = 0;
 bool vision_fresh() { return (vision_last_ms > 0) && (millis() - vision_last_ms < 500); }
 
 // Wizard (pulso de identificacao W<motor> <us> <ms>)
-int  wizard_motor = -1;
+int  wizard_motor = 1;
 int  wizard_us = 0;
 long wizard_remaining_ms = 0;
 
@@ -367,7 +373,7 @@ bool  enc_conectado = false;
 int   enc_raw_anterior = 0;
 long  enc_passos_acum = 0;       // 4096 passos = 1 volta completa
 float enc_voltas = 0.0f;         // Voltas acumuladas (com sinal: + fechando, - abrindo)
-float enc_voltas_max = 140.0f;    // Curso total p/ 100% [voltas] (~140 voltas medido na bancada)
+float enc_voltas_max = 140.0f;    // Curso total p/ 100% [voltas] (~45 voltas medido na bancada)
 float enc_pct = 0.0f;            // Porcentagem de voltas dadas (0 a 100%)
 float enc_vel_dps = 0.0f;        // Velocidade angular filtrada do encoder [graus/s]
 int   enc_estado = 0;            // -1 = Abrindo, 0 = Parado, +1 = Fechando
@@ -386,36 +392,31 @@ bool cruzamento_armado = false;
 unsigned long last_time_us = 0, last_swing_us = 0, last_telemetry_ms = 0;
 int esc_us_atual[3] = {ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL};
 
-// --- Monitoramento de Bateria 3S LiPo (Hex Cube Pixhawk 2 Power Module 30A) ---
-// Pino 4 (VOLT) em PA2 (ADC1_IN2): divisor ~10.1:1
-// Pino 3 (CURR) em PA3 (ADC1_IN3): ~18.0 A/V
-const float ADC_VREF_VOLTS     = 3.30f;
-const float ADC_MAX_COUNTS     = 4095.0f;
-float batt_volt_divider        = 10.10f;
-float batt_amps_per_volt       = 18.00f;
-float batt_curr_offset_v       = 0.00f;
-const float ALPHA_BATT_FILT    = 0.18f;
-float v_batt_est               = 0.0f;
-float i_batt_est               = 0.0f;
-bool  batt_init                = false;
+// Estado da Bateria 3S LiPo (Power Module Pixhawk 2 em PA2/PA3)
+float bat_volt_v  = 0.0f;
+float bat_curr_a  = 0.0f;
+bool  bat_init_ok = false;
 
-void atualizarLeituraBateria() {
-  long soma_v = 0, soma_i = 0;
+void atualizar_bateria() {
+  uint32_t raw_v = 0, raw_i = 0;
   for (int k = 0; k < 4; k++) {
-    soma_v += analogRead(PIN_BATT_VOLT);
-    soma_i += analogRead(PIN_BATT_CURR);
+    raw_v += analogRead(BAT_VOLT_PIN);
+    raw_i += analogRead(BAT_CURR_PIN);
   }
-  float v_pin_volt = ((soma_v * 0.25f) / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
-  float v_pin_curr = ((soma_i * 0.25f) / ADC_MAX_COUNTS) * ADC_VREF_VOLTS;
-  float v_inst = fmaxf(0.0f, v_pin_volt * batt_volt_divider);
-  float i_inst = fmaxf(0.0f, (v_pin_curr - batt_curr_offset_v) * batt_amps_per_volt);
-  if (!batt_init) {
-    v_batt_est = v_inst;
-    i_batt_est = i_inst;
-    batt_init = true;
+  float v_adc_volt = (raw_v * 0.25f) * (BAT_ADC_REF_V / BAT_ADC_MAX);
+  float v_adc_curr = (raw_i * 0.25f) * (BAT_ADC_REF_V / BAT_ADC_MAX);
+
+  float v_inst = v_adc_volt * BAT_VOLT_MULT;
+  float i_inst = (v_adc_curr - BAT_CURR_OFFSET_V) * BAT_AMP_PER_VOLT;
+  if (i_inst < 0.0f) i_inst = 0.0f;
+
+  if (!bat_init_ok) {
+    bat_volt_v = v_inst;
+    bat_curr_a = i_inst;
+    bat_init_ok = true;
   } else {
-    v_batt_est = ALPHA_BATT_FILT * v_inst + (1.0f - ALPHA_BATT_FILT) * v_batt_est;
-    i_batt_est = ALPHA_BATT_FILT * i_inst + (1.0f - ALPHA_BATT_FILT) * i_batt_est;
+    bat_volt_v = 0.85f * bat_volt_v + 0.15f * v_inst;
+    bat_curr_a = 0.85f * bat_curr_a + 0.15f * i_inst;
   }
 }
 
@@ -626,10 +627,8 @@ bool calibrar_mpu(bool verboso, bool forcar) {
       continue;
     }
 
-    // Filtro anti-outlier relativo a media filtrada: ignora picos bruscos sem descartar offset DC do sensor
-    if (n > 5 && (fabsf(s.gx - fgx) > CALIB_MAX_RATE_DPS ||
-                  fabsf(s.gy - fgy) > CALIB_MAX_RATE_DPS ||
-                  fabsf(s.gz - fgz) > CALIB_MAX_RATE_DPS)) {
+    // Filtro anti-outlier: descarta leitura pontual se houver tranco ou esbarrao
+    if (fabsf(s.gx) > CALIB_MAX_RATE_DPS || fabsf(s.gy) > CALIB_MAX_RATE_DPS || fabsf(s.gz) > CALIB_MAX_RATE_DPS) {
       delay(3);
       continue;
     }
@@ -645,8 +644,8 @@ bool calibrar_mpu(bool verboso, bool forcar) {
     }
     delay(3);
   }
-  digitalWrite(LED_PIN, LOW);
-  if (n < 10) {
+  digitalWrite(LED_PIN, HIGH);
+  if (n < 50) {
     if (verboso) Serial.println("[ERRO] Amostras insuficientes — calibracao abortada.");
     return false;
   }
@@ -665,8 +664,10 @@ bool calibrar_mpu(bool verboso, bool forcar) {
   }
   if (sd_max > CALIB_MAX_STD_DPS && !forcar) {
     if (verboso) {
-      Serial.println("[AVISO] Vibracao/movimento detectado na calibracao, aplicando media filtrada IIR.");
+      Serial.println("[RECUSADO] Esfera em movimento durante a calibracao. Pare o balanco e repita 'z'");
+      Serial.println("           (ou 'Z' para forcar, sabendo que o bias pode sair errado).");
     }
+    return false;
   }
   if (sd_max > CALIB_MAX_STD_DPS && verboso) {
     Serial.println("[AVISO] Calibracao FORCADA com movimento: bias pode estar errado.");
@@ -922,7 +923,7 @@ void passo_controle_yaw(float dt) {
     integral_error_yaw = 0.0f;
     last_error_yaw = pos_error_yaw;
     yaw_em_repouso = false;
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_PIN, HIGH);
     return;
   }
 
@@ -940,7 +941,7 @@ void passo_controle_yaw(float dt) {
     tz_cmd = 0.0f;
     integral_error_yaw = 0.0f;
     last_error_yaw = pos_error_yaw;
-    digitalWrite(LED_PIN, LOW);
+    digitalWrite(LED_PIN, HIGH);
     return;
   }
 
@@ -1101,7 +1102,7 @@ void ativarDriver() {
 void pararBTS() {
   digitalWrite(POLIA_RPWM_PIN, LOW);
   digitalWrite(POLIA_LPWM_PIN, LOW);
-  digitalWrite(LED_PIN, LOW);
+  digitalWrite(LED_PIN, HIGH);
   polia_em_movimento = false;
   polia_sentido = 0;
   Serial.println(">> POLIA: Motor PARADO");
@@ -1344,9 +1345,6 @@ void parada_geral() {
 }
 
 void comando_char(char c) {
-  // Normaliza maiusculas para minusculas (exceto 'Z' e 'F'), evitando que Caps Lock trave comandos
-  if (c >= 'A' && c <= 'Y' && c != 'F') c = c - 'A' + 'a';
-  if (c == 'b') c = 'p';
   bateuCima  = (digitalRead(FIM_CURSO_CIMA) == HIGH);
   bateuBaixo = (digitalRead(FIM_CURSO_BAIXO) == HIGH);
   switch (c) {
@@ -1614,7 +1612,6 @@ void comando_linha(const String &cmd) {
 // nem 'm'/'y'/'p'/'z': um byte perdido/ruido nao dispara teste de motor nem liga malha.
 const char WHITELIST[] = "wsxadcekK";
 bool eh_comando_imediato(char c) {
-  if (c == 'f' || c == 'F') return true;
   for (const char *p = WHITELIST; *p; p++) {
     if (*p == c) return true;
   }
@@ -1692,11 +1689,12 @@ void enviar_telemetria() {
   fmt_f2(num, enc_voltas); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
   fmt_f2(num, enc_pct);    n += snprintf(line + n, sizeof(line) - n, ",%s", num);
   n += snprintf(line + n, sizeof(line) - n, ",%d", enc_estado);
-  // Campos 26..27 (Modulo de Energia Pixhawk 2 - Bateria 3S LiPo): tensao [V] e corrente [A]
-  fmt_f2(num, v_batt_est); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
-  fmt_f2(num, i_batt_est); snprintf(line + n, sizeof(line) - n, ",%s", num);
+  // Campos 26..27 (Bateria 3S Power Module Pixhawk 2): tensao [V] (PA2), corrente [A] (PA3)
+  fmt_f2(num, bat_volt_v); n += snprintf(line + n, sizeof(line) - n, ",%s", num);
+  fmt_f2(num, bat_curr_a); snprintf(line + n, sizeof(line) - n, ",%s", num);
 
   Serial.println(line);
+  // Serial2 desativado: PA2 e PA3 sao entradas analogicas (VOLT e CURR do Power Module)
 }
 
 // =========================================================================================
@@ -1704,7 +1702,7 @@ void enviar_telemetria() {
 // =========================================================================================
 void setup() {
   pinMode(LED_PIN, OUTPUT);
-  digitalWrite(LED_PIN, LOW); // Active-LOW: LED PC13 ACESO FULL
+  digitalWrite(LED_PIN, HIGH);
 
   esc_a.attach(BF_PIN);
   esc_b.attach(AS_PIN);
@@ -1717,13 +1715,11 @@ void setup() {
   setup_pids();
 
   Serial.begin(115200);
-#if defined(USBCON) && defined(USBD_USE_CDC)
-  Serial.dtr(false); // Garante envio continuo de telemetria na USB sem depender de DTR da Rasp
-#endif
+  // PA2 (VOLT - Pino 4) e PA3 (CURR - Pino 3) configurados como entradas ADC 12 bits para o Power Module Pixhawk 2
   analogReadResolution(12);
-  pinMode(PIN_BATT_VOLT, INPUT_ANALOG);
-  pinMode(PIN_BATT_CURR, INPUT_ANALOG);
-  atualizarLeituraBateria();
+  pinMode(BAT_VOLT_PIN, INPUT_ANALOG);
+  pinMode(BAT_CURR_PIN, INPUT_ANALOG);
+  atualizar_bateria();
 
   destravar_barramento_I2C();
   Wire.setSCL(AS5600_SCL);
@@ -1782,13 +1778,13 @@ void setup() {
 }
 
 void loop() {
-  digitalWrite(LED_PIN, LOW); // LED PC13 sempre aceso FULL (Active-LOW)
   unsigned long now_us = micros();
   float dt = (now_us - last_time_us) * 1e-6f;
   last_time_us = now_us;
   if (dt <= 1e-6f || dt > 0.5f) dt = 0.005f;
 
   processar_serial(Serial, bufUSB, descartUSB);
+  // PA2/PA3 reservados para ADC da bateria (Power Module Pixhawk 2)
 
   // Watchdog da Polia (Deadman Switch de 250 ms trazido do YAWBOM)
   // Retorno automatico do Servo de Corte de Emergencia (100% nao bloqueante)
@@ -1861,7 +1857,7 @@ void loop() {
     float dt_tel = (millis() - last_telemetry_ms) * 1e-3f;
     last_telemetry_ms = millis();
     atualizarEncoderAS5600(dt_tel);
-    atualizarLeituraBateria();
+    atualizar_bateria();
     enviar_telemetria();
   }
 
