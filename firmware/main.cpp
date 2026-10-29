@@ -85,11 +85,11 @@
 
 // Power Module Hex Cube Pixhawk 2 (3S-6S, 30A, 5.3-40V -> 5.3V/2.5A)
 // Conector DF13 6 pinos: Pin 1,2 = VCC 5.3V | Pin 3 = CURR (PA3/A3) | Pin 4 = VOLT (PA2/A2) | Pin 5,6 = GND
-#define BAT_VOLT_PIN    PA2
-#define BAT_CURR_PIN    PA3
+#define BAT_VOLT_PIN    PA3 // Pino A3 = Tensão
+#define BAT_CURR_PIN    PA2 //Pino A2 = Corrente
 const float BAT_ADC_REF_V      = 3.3f;
 const float BAT_ADC_MAX        = 4095.0f;
-const float BAT_VOLT_MULT      = 10.10f; // Divisor padrao Pixhawk Power Module (~99 mV/V -> 10.1 V/V)
+const float BAT_VOLT_MULT      = 12.37f; // Calibrado: 11.87V multimetro / 9.69V lido (~12.37 V/V)
 const float BAT_AMP_PER_VOLT   = 17.00f; // Sensibilidade padrao Pixhawk 30A/60A (~17.0 A/V)
 const float BAT_CURR_OFFSET_V  = 0.0f;   // Offset em 0 A [V]
 
