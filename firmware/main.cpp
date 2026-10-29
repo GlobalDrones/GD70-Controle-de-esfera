@@ -698,7 +698,6 @@ bool calibrar_mpu(bool verboso, bool forcar) {
   last_time_us = last_swing_us;
   if (verboso) {
     Serial.println(">> Calibracao concluida com sucesso! Zero gravimetrico e gyro ajustados.");
-    Serial2.println(">> [MPU]: Calibracao OK (~2s)");
   }
   return true;
 }
@@ -1243,7 +1242,6 @@ void testarIdentificacaoMotores() {
   Serial.println("\n==========================================================");
   Serial.println("  TESTE E IDENTIFICACAO DOS 3 MOTORES                      ");
   Serial.println("==========================================================");
-  Serial2.println("[TESTE_MOTORES]: Iniciando sequencia...");
   escrever_escs(ESC_NEUTRAL, ESC_NEUTRAL, ESC_NEUTRAL);
   delay(1000);
 
@@ -1278,7 +1276,6 @@ void testarIdentificacaoMotores() {
   last_time_us = micros();
   last_swing_us = micros();
   Serial.println("  TESTE CONCLUIDO!\n");
-  Serial2.println("[TESTE_MOTORES]: Concluido!");
 }
 
 // =========================================================================================
@@ -1315,7 +1312,6 @@ bool ler_float(const String &txt, float &out) {
 
 void eco(const String &msg) {
   Serial.println(msg);
-  Serial2.println(msg);
 }
 
 void set_gains_from_struct() {
@@ -1341,7 +1337,6 @@ void parada_geral() {
   pararBTS();
   pararMotor();
   Serial.println(">> [STM]: PARADA GERAL (loops off + ESCs neutro + mecanismos)");
-  Serial2.println(">> [STM]: PARADA GERAL");
 }
 
 void comando_char(char c) {
@@ -1369,7 +1364,6 @@ void comando_char(char c) {
       }
       yaw_ativo = !yaw_ativo;
       Serial.println(yaw_ativo ? ">> [YAW]: ATIVADO" : ">> [YAW]: DESATIVADO");
-      Serial2.println(yaw_ativo ? ">> [YAW]: ATIVADO" : ">> [YAW]: DESATIVADO");
       if (!yaw_ativo) {
         integral_error_yaw = 0.0f;
         tz_cmd = 0.0f;
@@ -1384,7 +1378,6 @@ void comando_char(char c) {
       anti_balanco_ativo = !anti_balanco_ativo;
       Serial.println(anti_balanco_ativo ? ">> [PENDULO]: ANTI-BALANCO ATIVADO"
                                         : ">> [PENDULO]: ANTI-BALANCO DESATIVADO");
-      Serial2.println(anti_balanco_ativo ? ">> [PENDULO]: ATIVADO" : ">> [PENDULO]: DESATIVADO");
       if (!anti_balanco_ativo) {
         F_cmd_x = F_cmd_y = 0.0f;
         pid_vx.reset();
@@ -1421,7 +1414,6 @@ void comando_char(char c) {
       desired_yaw = 0.0f;
       integral_error_yaw = 0.0f;
       Serial.println(">> [YAW]: desired_yaw = 0");
-      Serial2.println(">> [YAW]: desired_yaw = 0");
       break;
   }
 }
@@ -1491,7 +1483,6 @@ void comando_linha(const String &cmd) {
     for (int i = 0; i < N_GAINS; i++) {
       String s = "GAIN," + String(i) + "," + GAIN_NAMES[i] + "," + String(*gain_ptr(i), 4);
       Serial.println(s);
-      Serial2.println(s);
     }
     return;
   }
@@ -1598,7 +1589,6 @@ void comando_linha(const String &cmd) {
     yaw_em_repouso = false;
     String msg = ">> NOVO ANGULO APLICADO: " + String(desired_yaw, 2);
     Serial.println(msg);
-    Serial2.println(msg);
     return;
   }
 
