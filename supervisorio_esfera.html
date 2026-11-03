@@ -540,6 +540,21 @@
       flex: 1 1 0;
       min-height: 0;
     }
+
+    /* Mobile: bloqueia o menu de long-press (abrir em outra aba / salvar imagem / seleção)
+       nos controles de operação. Inputs e selects ficam de fora para permitir colar/selecionar texto. */
+    button, .btn, .ctrl-btn, .panel-tab, .tab-btn, label.btn, canvas,
+    .polia-visual-box, .canvas-header, #cameraFeedWrapper {
+      -webkit-touch-callout: none;
+      -webkit-user-select: none;
+      user-select: none;
+    }
+    #cameraStreamImg {
+      pointer-events: none;
+      -webkit-user-drag: none;
+      -webkit-touch-callout: none;
+      user-select: none;
+    }
   </style>
 </head>
 <body>
@@ -559,23 +574,14 @@
       <span id="statusXY" style="color:var(--green); font-weight:700;">XY: LIGADO</span>
       <span id="statusHead" style="color:var(--green); font-weight:700;">HEADING: LIGADO</span>
       <span id="statusVision" style="color:var(--text-muted);">VISÃO: OFF</span>
-      <span id="statusBattStrip" style="color:var(--green); font-weight:700;">🔋 3S: 12.40V (93%) · 0.00A</span>
       <span id="statusPause" style="color:var(--amber); font-weight:700;"></span>
     </div>
 
-      <div style="display:flex; gap:6px; align-items:center;">
-        <button class="btn btn-danger emergency-stop" style="padding:7px 10px; font-size:0.80rem;" onclick="sendKillSwitch()">
-          🛑 PARADA GERAL
-        </button>
-        <button class="btn btn-warning" style="padding:7px 10px; font-size:0.76rem; font-weight:800; border:1px solid #f59e0b; background:rgba(245,158,11,0.18); color:#fde68a;" onclick="acionarCorteEmergencia()">
-          ✂️ CORTE (F)
-        </button>
-      </div>
+      <button class="btn btn-danger emergency-stop" style="padding:7px; font-size:0.80rem;" onclick="sendKillSwitch()">
+        🛑 PARADA GERAL
+      </button>
 
     <div class="header-actions" style="display:flex; gap:6px; align-items:center;">
-      <div class="badge" id="badgeBattHeader" title="Módulo de Energia Pixhawk 2 (Bateria 3S LiPo: PA2=VOLT, PA3=CURR)">
-        <span>🔋 3S:</span> <strong id="hdrBattVal" style="color:var(--green);">12.40V (93%)</strong>
-      </div>
       <div class="badge">
         <span class="badge-dot dot-amber" id="statusDot"></span>
         <span id="statusText">Simulador ativo</span>
@@ -832,47 +838,11 @@
         </div>
       </div>
 
-      <!-- Widget de Bateria 3S LiPo (Hex Cube Pixhawk 2 Power Module: PA2=VOLT, PA3=CURR) -->
-      <div class="card-title">
-        <span>Bateria 3S (Pixhawk 2)</span>
-        <span id="badgeBattPins" style="font-size:0.62rem; color:var(--cyan);">PA2 (VOLT) · PA3 (CURR)</span>
-      </div>
-
-      <div style="background:var(--bg-card); border:1px solid var(--border-color); border-radius:7px; padding:8px 10px; display:flex; flex-direction:column; gap:5px;">
-        <div style="display:flex; justify-content:space-between; align-items:baseline;">
-          <span style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">Tensão 3S (9.9V–12.6V):</span>
-          <strong id="lblBattVoltOp" style="font-size:0.96rem; color:var(--green); font-family:Consolas,monospace;">12.40 V (4.13 V/cél)</strong>
-        </div>
-        <div style="display:flex; justify-content:space-between; align-items:baseline;">
-          <span style="font-size:0.72rem; color:var(--text-muted); font-weight:600;">Corrente / Potência:</span>
-          <strong id="lblBattCurrOp" style="font-size:0.90rem; color:var(--cyan); font-family:Consolas,monospace;">0.00 A · 0.0 W</strong>
-        </div>
-        <div class="progress-bar-bg" style="height:9px;">
-          <div class="progress-bar-fill" id="barBattPctOp" style="width:93%; background:linear-gradient(90deg, var(--green), #22c55e);"></div>
-        </div>
-        <div style="display:flex; gap:4px; align-items:center; margin-top:2px;">
-          <button class="btn" style="padding:2px 6px; font-size:0.62rem;" onclick="sendRawCmd('b')" title="Solicita leitura detalhada dos ADCs PA2 e PA3 (comando b)">
-            🔍 Diagnóstico ADC (b)
-          </button>
-          <span style="font-size:0.61rem; color:var(--text-muted); margin-left:auto;">Multímetro:</span>
-          <input aria-label="Calibrar tensão real com multímetro" type="number" id="inputBattCalibV" class="form-control" placeholder="12.4" min="5.0" max="26.0" step="0.05" style="padding:1px 4px; font-size:0.65rem; width:54px;">
-          <button class="btn" style="padding:2px 6px; font-size:0.62rem;" onclick="calibrateBatteryVoltage()" title="Ajusta o divisor de tensão do PA2 com base no multímetro (comando B<V>)">
-            Calibrar V
-          </button>
-        </div>
-      </div>
-
-      <!-- Botão de Corte de Emergência da Corda (Servo PB3) -->
-      <div style="margin-top:4px;">
-        <button class="btn btn-warning btn-block" style="padding:7px; font-size:0.76rem; font-weight:800; border:1px solid #f59e0b; background:rgba(245,158,11,0.16); color:#fde68a;" onclick="acionarCorteEmergencia()">
-          ✂️ CORTE DE EMERGÊNCIA DA CORDA (PB3 — 180°)
-        </button>
-      </div>
 
       </section>
       <section class="card tablet-panel" id="panelTelemetry" role="tabpanel" aria-labelledby="panelTelemetryTab" hidden>
       <div class="card-title">
-        <span>Telemetria Instantânea (TEL v3 + 3S)</span>
+        <span>Telemetria Instantânea (TEL v2)</span>
         <button class="btn" style="padding:1px 6px; font-size:0.62rem;" onclick="exportCSV()">💾 CSV</button>
       </div>
 
@@ -900,14 +870,6 @@
         <div class="kpi-box">
           <span class="kpi-label">Cabo L / Dist. D</span>
           <div class="kpi-value" style="font-size:0.84rem;"><span id="kpiLD">5.00m / —</span></div>
-        </div>
-        <div class="kpi-box">
-          <span class="kpi-label">Bateria 3S (PA2 VOLT)</span>
-          <div class="kpi-value" style="color:var(--green); font-size:0.86rem;"><span id="kpiBattVolt">12.40 V (93%)</span></div>
-        </div>
-        <div class="kpi-box">
-          <span class="kpi-label">Corrente / Pot. (PA3)</span>
-          <div class="kpi-value" style="color:var(--cyan); font-size:0.86rem;"><span id="kpiBattCurr">0.00 A (0.0 W)</span></div>
         </div>
       </div>
 
@@ -1079,7 +1041,9 @@
       <div class="bench-actions">
         <button class="btn" onclick="sendRawCmd('z')">Calibrar MPU</button>
         <button class="btn" onclick="sendRawCmd('t')">Medir cabo L</button>
+        <button class="btn" onclick="sendRawCmd('!')">Reset STM</button>
         <button class="btn" onclick="confirmMotorTest()">Teste de motores</button>
+        <button class="btn" hidden></button>
       </div>
 
       </section>
@@ -1119,7 +1083,7 @@
           </div>
           <canvas id="canvasXY" class="canvas-body"></canvas>
           <div id="cameraFeedWrapper" style="display:none; flex:1; width:100%; height:100%; min-height:0; background:#04060b; position:relative; align-items:center; justify-content:center; overflow:hidden;">
-            <img id="cameraStreamImg" src="" alt="Stream Câmera" style="width:100%; height:100%; object-fit:contain; display:none;">
+            <img id="cameraStreamImg" src="" alt="Stream Câmera" draggable="false" style="width:100%; height:100%; object-fit:contain; display:none;">
             <div id="cameraPlaceholder" style="display:flex; flex-direction:column; align-items:center; justify-content:center; color:var(--text-muted); font-size:0.75rem; padding:15px; text-align:center;">
               <div style="font-size:2rem; margin-bottom:6px;">📷</div>
               <strong style="color:var(--cyan); margin-bottom:4px;">CÂMERA DA RASPBERRY PI 5 (SEM VNC)</strong>
@@ -1730,9 +1694,7 @@
       pinca_locked: true, // true = Cadeado Travado (Baixo 's'), false = Cadeado Aberto (Cima 'w')
       pinca_motor: 0,     // 1 = Subindo ('w'), -1 = Descendo ('s'), 0 = Parado ('x')
       pinca_lim_cima: false,
-      pinca_lim_baixo: false,
-      v_batt: 12.40,      // Tensão da bateria 3S LiPo [V] (Pino 4 VOLT -> PA2)
-      i_batt: 0.00        // Corrente da bateria [A] (Pino 3 CURR -> PA3)
+      pinca_lim_baixo: false
     };
 
     let poliaHoldTimer = null;
@@ -1883,9 +1845,6 @@
         activeState.xy_on = controller.xy_enabled;
         activeState.yaw_on = controller.heading_enabled;
         activeState.vision_on = visionState.active;
-        const simLoadA = (Math.abs(act.thrusts[0]) + Math.abs(act.thrusts[1]) + Math.abs(act.thrusts[2])) * 0.45 + 0.35;
-        activeState.i_batt = simLoadA;
-        activeState.v_batt = Math.max(9.9, 12.45 - simLoadA * 0.04);
 
         if (simTelAccum >= 0.04) { // 25 Hz log (mesma taxa do TEL)
           simTelAccum -= 0.04;
@@ -1905,11 +1864,11 @@
       const line = rawLine.trim();
       if (!line) return;
 
-      // 1. Linha TEL: v2 (16), v3 (21), v3+AS5600 (25) ou v3+AS5600+Bateria3S (27 campos).
+      // 1. Linha TEL: v2 (16 campos), v3 (21 campos) ou v3+AS5600 (25 campos).
       //    Desde 14/10/2026 sx/sy/wx/wy são do CORPO (sx>0 = deslocado para +X do motor a).
       if (line.startsWith("TEL,")) {
         const p = line.split(",");
-        if (p.length !== 16 && p.length !== 21 && p.length !== 25 && p.length !== 27) return;
+        if (p.length !== 16 && p.length !== 21 && p.length !== 25) return;
         const t_ms = parseFloat(p[1]);
         const yaw_deg = parseFloat(p[2]);
         const bearing_deg = parseFloat(p[3]);
@@ -1997,17 +1956,11 @@
           activeState.tz_cmd = null;
           activeState.vhat = null;
         }
-        if (p.length >= 25) {
+        if (p.length === 25) {
           activeState.enc_ok = parseInt(p[21], 10) === 1;
           activeState.enc_voltas = parseFloat(p[22]);
           activeState.enc_pct = parseFloat(p[23]);
           activeState.enc_estado = parseInt(p[24], 10);
-        }
-        if (p.length >= 27) {
-          const vb = parseFloat(p[25]);
-          const ib = parseFloat(p[26]);
-          if (isFinite(vb)) activeState.v_batt = vb;
-          if (isFinite(ib)) activeState.i_batt = ib;
         }
         if (activeState.mpu_fail && !activeState._mpuFailLogged) {
           logMsg("⚠️ STM: MPU em FALHA — malhas desligadas. Verifique I2C e rode 'z'.");
@@ -2515,28 +2468,10 @@
       }
     }
 
-    function acionarCorteEmergencia() {
-      if (confirm("⚠️ ATENÇÃO: Acionar o Servo de Corte de Emergência da Corda (PB3 em 180° por 1 s)?")) {
-        sendRawCmd("F");
-        logMsg("✂️ CORTE DE EMERGÊNCIA (F) enviado ao STM32 (Servo PB3 180° por 1s).");
-      }
-    }
-
-    function calibrateBatteryVoltage() {
-      const val = parseFloat(document.getElementById("inputBattCalibV").value);
-      if (!isNaN(val) && val >= 5.0 && val <= 30.0) {
-        activeState.v_batt = val;
-        if (isReal()) sendRawCmd(`B${val.toFixed(2)}`);
-        logMsg(`🔋 Calibração da bateria 3S enviada: B${val.toFixed(2)} V.`);
-      } else {
-        alert("Informe a tensão real medida no multímetro (ex: 12.40).");
-      }
-    }
-
     // Teclado — tabela única em docs/COMANDOS.md (mesmas teclas da Rasp e do twin).
     // Letras que são comando do STM enviam a PRÓPRIA letra (tecla = comando); as demais
     // são locais e não colidem com nenhum comando do STM.
-    const TECLAS_STM_DIRETAS = new Set(["w", "s", "x", "a", "d", "c", "e", "b", "z", "t"]);
+    const TECLAS_STM_DIRETAS = new Set(["w", "s", "x", "a", "d", "c", "e", "z", "t"]);
     window.addEventListener("keydown", (e) => {
       if (["INPUT", "SELECT", "TEXTAREA"].includes(document.activeElement.tagName)) return;
       if (e.ctrlKey || e.metaKey || e.altKey) return;
@@ -2546,13 +2481,11 @@
         heldKeys.add(e.key);
         return;
       }
-      const k = e.key.toLowerCase();
+      const k = e.key;
       if (k === "," || k === ".") {             // torque externo (só simulador)
         heldKeys.add(k);
-      } else if (k === "k") {
+      } else if (k === "k" || k === "K") {
         sendKillSwitch();
-      } else if (k === "f") {
-        acionarCorteEmergencia();
       } else if (k === "p") {
         toggleXYLoop();
       } else if (k === "y") {
@@ -3016,51 +2949,6 @@
       document.getElementById("kpiSxSy").innerText = `${s.sx_deg.toFixed(2)}° /${s.sy_deg.toFixed(2)}°`;
       document.getElementById("kpiLD").innerText = `${s.L_m.toFixed(2)}m / ${dTxt}`;
 
-      // Bateria 3S LiPo (9.9V = 0% | 11.1V nominal | 12.6V = 100%)
-      const vBatt = isFinite(s.v_batt) ? s.v_batt : 0.0;
-      const iBatt = isFinite(s.i_batt) ? s.i_batt : 0.0;
-      const pBatt = vBatt * iBatt;
-      const vCell = vBatt / 3.0;
-      const pctBatt = vBatt < 2.0 ? 0 : Math.max(0, Math.min(100, ((vBatt - 9.90) / (12.60 - 9.90)) * 100.0));
-      const battColor = vBatt >= 11.10 ? "var(--green)" : (vBatt >= 10.50 ? "var(--amber)" : "var(--red)");
-      const battBarBg = vBatt >= 11.10
-        ? "linear-gradient(90deg, var(--green), #22c55e)"
-        : (vBatt >= 10.50 ? "linear-gradient(90deg, var(--amber), #fbbf24)" : "linear-gradient(90deg, var(--red), #f87171)");
-
-      const elBattStrip = document.getElementById("statusBattStrip");
-      if (elBattStrip) {
-        elBattStrip.innerText = `🔋 3S: ${vBatt.toFixed(2)}V (${pctBatt.toFixed(0)}%) · ${iBatt.toFixed(2)}A`;
-        elBattStrip.style.color = battColor;
-      }
-      const elHdrBatt = document.getElementById("hdrBattVal");
-      if (elHdrBatt) {
-        elHdrBatt.innerText = `${vBatt.toFixed(2)}V (${pctBatt.toFixed(0)}%)`;
-        elHdrBatt.style.color = battColor;
-      }
-      const elBattVOp = document.getElementById("lblBattVoltOp");
-      if (elBattVOp) {
-        elBattVOp.innerText = `${vBatt.toFixed(2)} V (${vCell.toFixed(2)} V/cél · ${pctBatt.toFixed(0)}%)`;
-        elBattVOp.style.color = battColor;
-      }
-      const elBattIOp = document.getElementById("lblBattCurrOp");
-      if (elBattIOp) {
-        elBattIOp.innerText = `${iBatt.toFixed(2)} A · ${pBatt.toFixed(1)} W`;
-      }
-      const elBarBatt = document.getElementById("barBattPctOp");
-      if (elBarBatt) {
-        elBarBatt.style.width = `${pctBatt.toFixed(1)}%`;
-        elBarBatt.style.background = battBarBg;
-      }
-      const elKpiBV = document.getElementById("kpiBattVolt");
-      if (elKpiBV) {
-        elKpiBV.innerText = `${vBatt.toFixed(2)} V (${pctBatt.toFixed(0)}%)`;
-        elKpiBV.style.color = battColor;
-      }
-      const elKpiBI = document.getElementById("kpiBattCurr");
-      if (elKpiBI) {
-        elKpiBI.innerText = `${iBatt.toFixed(2)} A (${pBatt.toFixed(1)} W)`;
-      }
-
       // Barras de Motores
       const ids = [["lblMotorA", "barMotorA"], ["lblMotorB", "barMotorB"], ["lblMotorC", "barMotorC"]];
       for (let i = 0; i < 3; i++) {
@@ -3251,6 +3139,15 @@
         stopPoliaHold();
       };
       ["pointerup", "pointercancel", "lostpointercapture"].forEach(type => button.addEventListener(type, release));
+      // Botão crítico de operação: nunca abrir menu de contexto no long-press.
+      button.addEventListener("contextmenu", e => e.preventDefault());
+    });
+    // Long-press em mobile dispara 'contextmenu' (abrir em outra aba, salvar imagem, etc.) e o
+    // navegador cancela o ponteiro. Bloqueia nos controles/canvas/câmera; inputs e selects ficam livres.
+    document.addEventListener("contextmenu", (e) => {
+      if (e.target.closest && e.target.closest("button, .btn, .ctrl-btn, .panel-tab, .tab-btn, label.btn, canvas, #cameraFeedWrapper, .polia-visual-box")) {
+        e.preventDefault();
+      }
     });
     function releaseTabletInputs() {
       heldKeys.clear();
