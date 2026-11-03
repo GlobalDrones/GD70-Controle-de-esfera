@@ -105,7 +105,13 @@ if arduino is None:
     print("[AVISO] STM32 não encontrada inicialmente. A thread tentará reconectar em background.")
 
 # Ponte TCP/HTTP: linhas do STM vão ao twin/supervisório; comandos voltam pela serial; stream de vídeo HTTP
-bridge = Bridge(on_client_line=lambda line: send_cmd_serial(line))
+def _on_bridge_line(line):
+    if line.strip() == "!":
+        threading.Thread(target=resetar_stm32, daemon=True).start()
+        return
+    send_cmd_serial(line)
+
+bridge = Bridge(on_client_line=_on_bridge_line)
 bridge.start()
 
 
