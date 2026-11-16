@@ -31,7 +31,7 @@ FRAME_H = 720
 _has_display = bool(os.environ.get("DISPLAY") or os.environ.get("WAYLAND_DISPLAY"))
 GUI_ENABLED = (os.environ.get("ESFERA_GUI", "1" if _has_display else "0") != "0") and _has_display
 GUI_MAX_FPS = float(os.environ.get("ESFERA_GUI_FPS", "10"))
-GUI_SCALE = float(os.environ.get("ESFERA_GUI_SCALE", "0.6"))
+GUI_SCALE = float(os.environ.get("ESFERA_GUI_SCALE", "1"))
 
 cv2.setNumThreads(4)
 
@@ -40,29 +40,55 @@ cv2.setNumThreads(4)
 # ===========================================================================
 def load_params():
     cmtx0 = np.array(
-        [[2436.90910, 0, 276.497033], [0, 2484.41881, 257.576427], [0, 0, 1]],
-        dtype=np.float64,
-    )
-    dist0 = np.array([[0.05499633, -0.21484423, 0.0, 0.0, 0.0]], dtype=np.float64)
-    cmtx1 = np.array(
-        [[2311.62632, 0, 585.375034], [0, 3394.81267, 90.9356098], [0, 0, 1.0]],
-        dtype=np.float64,
-    )
-    dist1 = np.array([[0.18799809, -0.77468388, 0.0, 0.0, 0.0]], dtype=np.float64)
-    R_rel = np.array(
         [
-            [ 0.99988746, -0.01336806,  0.00680891],
-            [ 0.01271275,  0.99598828,  0.08857613],
-            [-0.00796569, -0.0884796,   0.99604614],
+            [10017.85382753, 0.00000000, 637.75835263],
+            [0.00000000, 10290.54697439, 363.41440047],
+            [0.00000000, 0.00000000, 1.00000000]
         ],
         dtype=np.float64,
     )
-    T_rel = np.array([[-0.36560792], [-0.01454288], [-0.06727148]], dtype=np.float64)
+    dist0 = np.array(
+        [
+            [-9.44174824, 2020.43828649, 0.00000000, 0.00000000, 0.00000000]
+        ],
+        dtype=np.float64,
+    )
+    cmtx1 = np.array(
+        [
+            [7149.08620798, 0.00000000, 947.87981099],
+            [0.00000000, 7600.80391868, 656.89704890],
+            [0.00000000, 0.00000000, 1.00000000]
+        ],
+        dtype=np.float64,
+    )
+    dist1 = np.array(
+        [
+            [-3.38198466, 60.22101590, 0.00000000, 0.00000000, 0.00000000]
+        ],
+        dtype=np.float64,
+    )
+    R_rel = np.array(
+        [
+            [0.99737032, 0.01850944, -0.07007024],
+            [-0.02119362, 0.99906209, -0.03775948],
+            [0.06930561, 0.03914523, 0.99682716]
+        ],
+        dtype=np.float64,
+    )
+    T_rel = np.array(
+        [
+            [0.40004986],
+            [0.07053767],
+            [-1.80910876]
+        ],
+        dtype=np.float64,
+    )
     baseline_m = abs(float(T_rel[0][0]))
     if baseline_m > 2.0:
         T_rel = T_rel / 100.0
         baseline_m = abs(float(T_rel[0][0]))
     return cmtx0, dist0, cmtx1, dist1, R_rel, T_rel
+
     
 
 
@@ -89,5 +115,4 @@ class Profiler:
             print(f"[PROFILE] {parts} | TOTAL: {total:.1f}ms")
             self.acc.clear()
             self.count = 0
-
 
