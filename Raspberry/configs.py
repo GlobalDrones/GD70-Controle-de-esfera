@@ -41,45 +41,45 @@ cv2.setNumThreads(4)
 def load_params():
     cmtx0 = np.array(
         [
-            [10017.85382753, 0.00000000, 637.75835263],
-            [0.00000000, 10290.54697439, 363.41440047],
+            [1577.07471815, 0.00000000, 700.20379270],
+            [0.00000000, 1577.07471815, 486.80694469],
             [0.00000000, 0.00000000, 1.00000000]
         ],
         dtype=np.float64,
     )
     dist0 = np.array(
         [
-            [-9.44174824, 2020.43828649, 0.00000000, 0.00000000, 0.00000000]
+            [0.02122462, 0.00000000, 0.00000000, 0.00000000, 0.00000000]
         ],
         dtype=np.float64,
     )
     cmtx1 = np.array(
         [
-            [7149.08620798, 0.00000000, 947.87981099],
-            [0.00000000, 7600.80391868, 656.89704890],
+            [1577.07471815, 0.00000000, 611.88354212],
+            [0.00000000, 1577.07471815, 436.91619332],
             [0.00000000, 0.00000000, 1.00000000]
         ],
         dtype=np.float64,
     )
     dist1 = np.array(
         [
-            [-3.38198466, 60.22101590, 0.00000000, 0.00000000, 0.00000000]
+            [0.03686214, 0.00000000, 0.00000000, 0.00000000, 0.00000000]
         ],
         dtype=np.float64,
     )
     R_rel = np.array(
         [
-            [0.99737032, 0.01850944, -0.07007024],
-            [-0.02119362, 0.99906209, -0.03775948],
-            [0.06930561, 0.03914523, 0.99682716]
+            [0.99694831, -0.05596877, -0.05442030],
+            [0.05651897, 0.99836429, 0.00862310],
+            [0.05384866, -0.01167256, 0.99848088]
         ],
         dtype=np.float64,
     )
     T_rel = np.array(
         [
-            [0.40004986],
-            [0.07053767],
-            [-1.80910876]
+            [0.25091677],
+            [0.00954973],
+            [0.00804070]
         ],
         dtype=np.float64,
     )
@@ -89,7 +89,69 @@ def load_params():
         baseline_m = abs(float(T_rel[0][0]))
     return cmtx0, dist0, cmtx1, dist1, R_rel, T_rel
 
+
+
     
+
+
+def validar_calibracao(cmtx0, dist0, cmtx1, dist1, R_rel, T_rel, frame_w=FRAME_W):
+    """Avisa (nao aborta) quando a calibracao tem cara de lixo. Webcam 720p
+    normal: f ~ 0.6-1.6 x largura, k1/k2 pequenos, T quase so em X."""
+    avisos = []
+
+    for nome, K in (("cam0", cmtx0), ("cam1", cmtx1)):
+        fx, fy = K[0, 0], K[1, 1]
+        if not (0.4 * frame_w <= fx <= 3.0 * frame_w):
+            avisos.append(f"{nome}: fx={fx:.0f}px fora do plausivel "
+                          f"({0.4*frame_w:.0f}-{3*frame_w:.0f})")
+        if abs(fx - fy) / max(fx, fy) > 0.1:
+            avisos.append(f"{nome}: fx={fx:.0f} e fy={fy:.0f} muito diferentes")
+        if abs(K[0, 2] - frame_w / 2) > 0.25 * frame_w:
+            avisos.append(f"{nome}: ponto principal cx={K[0, 2]:.0f} longe do centro")
+
+    for nome, d in (("cam0", dist0), ("cam1", dist1)):
+        k1, k2 = float(d.ravel()[0]), float(d.ravel()[1])
+        if abs(k1) > 2.0 or abs(k2) > 5.0:
+            avisos.append(f"{nome}: distorcao k1={k1:.2f}, k2={k2:.2f} absurda")
+
+    T = np.asarray(T_rel, dtype=np.float64).ravel()
+    nT = float(np.linalg.norm(T))
+    if nT > 1e-9 and abs(T[2]) / nT > 0.3:
+        avisos.append(f"T={T.round(3)}: componente Z domina (rig lado a lado "
+                      "deveria ter T quase so em X)")
+
+    ang = np.degrees(np.arccos(np.clip((np.trace(R_rel) - 1) / 2, -1, 1)))
+    if ang > 15:
+        avisos.append(f"R_rel gira {ang:.1f} graus entre as cameras")
+
+    for a in avisos:
+        print(f"[AVISO CALIB] {a}")
+    if avisos:
+        print("[AVISO CALIB] Profundidade 3D nao e confiavel com essa "
+              "calibracao. Refaca o calib.py.")
+    return not avisos
+
+
+def checar_ordem_cameras():
+    """cmtx0/dist0 pertencem a camera0 do calibration_settings.yaml. Se o
+    CAM0_ID daqui for outro dispositivo, as matrizes ficam trocadas."""
+    try:
+        import yaml
+        caminho = os.path.join(os.path.dirname(os.path.abspath(__file__)),
+                               "Calibration", "calibration_settings.yaml")
+        with open(caminho) as f:
+            cfg = yaml.safe_load(f)
+    except Exception as e:
+        print(f"[AVISO CALIB] Nao consegui ler o yaml de calibracao: {e}")
+        return True
+
+    if cfg.get("camera0") != CAM0_ID or cfg.get("camera1") != CAM1_ID:
+        print(f"[AVISO CALIB] Ordem das cameras difere: yaml camera0="
+              f"{cfg.get('camera0')} camera1={cfg.get('camera1')} | "
+              f"configs CAM0_ID={CAM0_ID} CAM1_ID={CAM1_ID}. "
+              "As matrizes de calibracao podem estar trocadas.")
+        return False
+    return True
 
 
 class Profiler:

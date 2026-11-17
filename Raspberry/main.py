@@ -1,4 +1,3 @@
-
 from video_streamer import *
 from serial_communication import *
 from camera_and_image_manipulation import *
@@ -192,7 +191,6 @@ def main():
                 )
 
             rect_l = f0
-
             hough_vis = rect_l.copy()
 
             cx = out_size[0] // 2
@@ -293,7 +291,7 @@ def main():
             ])
 
         # =====================================================================
-        # MODO ESTEREO: INTERSECAO DOS PLANOS
+        # MODO ESTEREO: GRID 3 LINHAS (CAM1/CAM2 | BIN1/BIN2 | SGBM NA ROI)
         # =====================================================================
 
         else:
@@ -362,19 +360,11 @@ def main():
                 roi_radius,
                 SCALES[scale_key]
             )
-            
-            # -----------------------------------------------------------------
-            # Diagnóstico da associação estéreo.
-            # -----------------------------------------------------------------
-
-            debug = getattr(detectar_e_reconstruir, "debug", {})
 
             now_debug = time.time()
-
             if now_debug - t_debug_last >= 1.0:
                 t_debug_last = now_debug
 
-                
             bin_vis_l = cv2.cvtColor(
                 roi_left,
                 cv2.COLOR_GRAY2BGR
@@ -401,14 +391,21 @@ def main():
                     / len(historico_angulos)
                 )
 
-                stats_str = (
-                    f"LINHA 3D | "
-                    f"D MEDIA: {dist_alvo:.2f}m | "
-                    f"Bearing: {angulo:+.1f} deg | "
-                    f"Plano: {reconstruction['plane_sine']:.3f}"
-                )
-
-                stats_color = (0, 255, 0)
+                if dist_alvo >= 0:
+                    stats_str = (
+                        f"LINHA 3D | "
+                        f"D MEDIA: {dist_alvo:.2f}m | "
+                        f"Bearing: {angulo:+.1f} deg | "
+                        f"Plano: {reconstruction['plane_sine']:.3f}"
+                    )
+                    stats_color = (0, 255, 0)
+                else:
+                    stats_str = (
+                        f"LINHA 2D (SEM PROFUNDIDADE) | "
+                        f"Bearing: {angulo:+.1f} deg | "
+                        f"Plano: {reconstruction['plane_sine']:.3f}"
+                    )
+                    stats_color = (0, 200, 255)
 
                 left_candidate = reconstruction["left"]
                 right_candidate = reconstruction["right"]
@@ -441,7 +438,6 @@ def main():
                     3
                 )
 
-                # Envio serial: mantém a interface atual.
                 if visao_atualiza_angulo:
                     send_ang_serial(
                         media_angulo,
@@ -455,7 +451,7 @@ def main():
                 )
 
             # -----------------------------------------------------------------
-            # ROI e informações de imagem.
+            # ROI e rótulos de cada célula do grid
             # -----------------------------------------------------------------
 
             for frame in (
@@ -474,8 +470,8 @@ def main():
 
             cv2.putText(
                 hough_vis_l,
-                "Cam Esquerda",
-                (10, out_size[1] - 20),
+                "Cam1 (Esquerda)",
+                (10, out_size[1] - 15),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 255, 255),
@@ -484,8 +480,8 @@ def main():
 
             cv2.putText(
                 hough_vis_r,
-                "Cam Direita",
-                (10, out_size[1] - 20),
+                "Cam2 (Direita)",
+                (10, out_size[1] - 15),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (0, 255, 255),
@@ -494,8 +490,8 @@ def main():
 
             cv2.putText(
                 bin_vis_l,
-                "Bin Esquerda",
-                (10, out_size[1] - 20),
+                "Bin1 (Esquerda)",
+                (10, out_size[1] - 15),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (255, 255, 255),
@@ -504,20 +500,40 @@ def main():
 
             cv2.putText(
                 bin_vis_r,
-                "Bin Direita",
-                (10, out_size[1] - 20),
+                "Bin2 (Direita)",
+                (10, out_size[1] - 15),
                 cv2.FONT_HERSHEY_SIMPLEX,
                 0.6,
                 (255, 255, 255),
                 2
             )
 
-            # Exibe as duas câmeras e as respectivas binarizações.
-            display = cv2.hconcat([
-                hough_vis_l,
-                hough_vis_r,
-                bin_vis_l,
-                bin_vis_r
+            # -----------------------------------------------------------------
+            # Montagem do Grid:
+            # | Cam1 | Cam2 |
+            # | Bin1 | Bin2 |
+            # | SGBM na ROI |
+            # -----------------------------------------------------------------
+            row1_cams = cv2.hconcat([hough_vis_l, hough_vis_r])
+            row2_bins = cv2.hconcat([bin_vis_l, bin_vis_r])
+            row3_sgbm = getattr(
+                detectar_e_reconstruir,
+                "last_sgbm_panel",
+                np.zeros((out_size[1], out_size[0] * 2, 3), dtype=np.uint8)
+            )
+
+            # Linhas divisórias do grid
+            w_total = out_size[0] * 2
+            h_cell = out_size[1]
+            cv2.line(row1_cams, (out_size[0], 0), (out_size[0], h_cell), (90, 90, 90), 2)
+            cv2.line(row2_bins, (out_size[0], 0), (out_size[0], h_cell), (90, 90, 90), 2)
+            cv2.line(row2_bins, (0, 0), (w_total, 0), (90, 90, 90), 2)
+            cv2.line(row3_sgbm, (0, 0), (w_total, 0), (90, 90, 90), 2)
+
+            display = cv2.vconcat([
+                row1_cams,
+                row2_bins,
+                row3_sgbm
             ])
 
         # =====================================================================

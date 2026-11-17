@@ -3,18 +3,10 @@
 #
 # Uso:
 #     python3 calib.py calibration_settings.yaml
-#     python3 calib.py calibration_settings.yaml --reuse-frames   (pula captura, recalibra com os frames em disco)
-#
-# Chaves OPCIONAIS novas no yaml (todas com default):
-#     fix_principal_point: false   # trava cx,cy no centro (paliativo)
-#     fix_aspect_ratio:    false   # trava fx/fy (so se pixel for quadrado)
-#     focal_guess_px:      null    # chute inicial de foco (default = frame_width)
-#     manual_review:       false   # mostra cada deteccao e espera tecla (S = pular)
-#     outlier_factor:      2.0     # descarta frame com erro > fator * mediana
-#     outlier_min_px:      0.5     # ...mas nunca abaixo deste erro (px)
+#     python3 calib.py calibration_settings.yaml --reuse-frames
+#     python3 calib.py calibration_settings.yaml --migrate-old-frames  (inverte cam0<->cam1 e gira 180 nos PNGs antigos e recalibra)
 
 import cv2 as cv
-import glob
 import numpy as np
 import sys
 import time
@@ -29,16 +21,19 @@ calibration_settings = {}
 # CONFIGURACOES DE ROBUSTEZ
 # ===========================================================================
 
-WAITKEY_TIMEOUT_MS = 30000     # 30s max esperando tecla na revisao manual
-SATURATION_MAX_FRAC = 0.05     # >5% de pixels saturados (>=250) na regiao do tabuleiro = reflexo/superexposto
-MIN_VIEWS = 8                  # minimo de frames para aceitar rejeicao de outliers
-MAX_REJECT_PASSES = 3          # quantas recalibracoes no maximo no loop de outliers
+WAITKEY_TIMEOUT_MS = 30000
+SATURATION_MAX_FRAC = 0.08
+MIN_VIEWS = 8
+MAX_REJECT_PASSES = 12
 
 FRAMES_DIR = 'frames'
 PAIRS_DIR = 'frames_pair'
 PARAMS_DIR = 'camera_parameters'
 
-CRITERIA = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 0.001)
+CRITERIA = (cv.TERM_CRITERIA_EPS + cv.TERM_CRITERIA_MAX_ITER, 100, 1e-5)
+
+# Grade fisica de distancias focais (px) para 1280x720 (HFOV ~ 45 a 95 graus)
+FOCAL_GRID_PX = [600.0, 700.0, 800.0, 900.0, 1000.0, 1100.0, 1250.0, 1400.0]
 
 
 # ===========================================================================
@@ -64,7 +59,45 @@ def cfg(key, default=None):
 
 
 # ===========================================================================
-# CLASSE DE CAPTURA ASSINCRONA
+# MIGRACAO DE FRAMES ANTIGOS (SWAP CAM0<->CAM1 + ROTATE 180)
+# ===========================================================================
+
+def migrate_old_frames_on_disk():
+    """Converte in-place os PNGs capturados com o script antigo (onde cam0 e cam1
+    estavam invertidos no yaml e sem ROTATE_180)."""
+    print('\n[MIGRACAO] Convertendo frames antigos (swap camera0 <-> camera1 + ROTATE_180)...')
+    for folder in (FRAMES_DIR, PAIRS_DIR):
+        if not os.path.isdir(folder):
+            continue
+        d0 = frames_dict(folder, 'camera0')
+        d1 = frames_dict(folder, 'camera1')
+        # Move para arquivos temporarios primeiro para nao sobrescrever
+        tmp0, tmp1 = {}, {}
+        for idx, p in d0.items():
+            img = cv.imread(p, 1)
+            if img is not None:
+                img = cv.rotate(img, cv.ROTATE_180)
+                tp = os.path.join(folder, f'_tmp_cam1_{idx}.png')
+                cv.imwrite(tp, img)
+                tmp1[idx] = tp
+            os.remove(p)
+        for idx, p in d1.items():
+            img = cv.imread(p, 1)
+            if img is not None:
+                img = cv.rotate(img, cv.ROTATE_180)
+                tp = os.path.join(folder, f'_tmp_cam0_{idx}.png')
+                cv.imwrite(tp, img)
+                tmp0[idx] = tp
+            os.remove(p)
+        for idx, tp in tmp0.items():
+            os.rename(tp, os.path.join(folder, f'camera0_{idx}.png'))
+        for idx, tp in tmp1.items():
+            os.rename(tp, os.path.join(folder, f'camera1_{idx}.png'))
+        print(f'  [{folder}] {len(tmp0)} frames camera0 e {len(tmp1)} frames camera1 convertidos.')
+
+
+# ===========================================================================
+# CLASSE DE CAPTURA ASSINCRONA (ALINHADA COM video_streamer.py)
 # ===========================================================================
 
 class AsyncCamera:
@@ -79,35 +112,39 @@ class AsyncCamera:
         self._cap = None
 
     def start(self):
-        print(f'  [{self.name}] Conectando...')
-        self._cap = cv.VideoCapture(self.src)
+        print(f'  [{self.name}] Conectando ({self.src})...')
+        is_local = isinstance(self.src, int) or str(self.src).startswith("/dev/")
+        backend = cv.CAP_V4L2 if is_local else cv.CAP_ANY
+        self._cap = cv.VideoCapture(self.src, backend)
         if not self._cap.isOpened():
-            print(f'  [ERRO] Nao foi possivel abrir a camera {self.name}')
+            print(f'  [ERRO] Nao foi possivel abrir a camera {self.name} ({self.src})')
             return False
 
+        if is_local:
+            self._cap.set(cv.CAP_PROP_FOURCC, cv.VideoWriter_fourcc(*"MJPG"))
         self._cap.set(cv.CAP_PROP_FRAME_WIDTH, self.width)
         self._cap.set(cv.CAP_PROP_FRAME_HEIGHT, self.height)
         self._cap.set(cv.CAP_PROP_BUFFERSIZE, 1)
 
-        # Descarta os primeiros frames para estabilizar
         last = None
         for _ in range(5):
             ret, f = self._cap.read()
-            if ret and f is not None:
-                last = f
+            if ret and f is not None and f.size > 0:
+                last = cv.rotate(f, cv.ROTATE_180)
 
-        # Confere se a resolucao real bate com a configurada
-        if last is not None:
-            h, w = last.shape[:2]
-            if (w, h) != (self.width, self.height):
-                print(f'  [AVISO] {self.name}: resolucao real {w}x{h} != configurada '
-                      f'{self.width}x{self.height}. As intrinsecas so servem se a '
-                      f'resolucao de runtime for IGUAL a da calibracao.')
-            self.frame = last
+        if last is None:
+            self._cap.release()
+            print(f'  [ERRO] {self.name} abriu mas nao entregou frames.')
+            return False
+
+        h, w = last.shape[:2]
+        if (w, h) != (self.width, self.height):
+            print(f'  [AVISO] {self.name}: resolucao real {w}x{h} != configurada {self.width}x{self.height}.')
+        self.frame = last
 
         self.running = True
         threading.Thread(target=self._loop, daemon=True).start()
-        print(f'  [{self.name}] Conectada e rodando em background.')
+        print(f'  [{self.name}] Conectada e rodando em background (ROTATE_180 ativo).')
         return True
 
     def _loop(self):
@@ -115,6 +152,7 @@ class AsyncCamera:
             if self._cap is not None and self._cap.isOpened():
                 ret, frame = self._cap.read()
                 if ret and frame is not None and frame.size > 0:
+                    frame = cv.rotate(frame, cv.ROTATE_180)
                     with self.lock:
                         self.frame = frame
                 else:
@@ -134,26 +172,73 @@ class AsyncCamera:
 
 
 # ===========================================================================
-# DETECCAO ROBUSTA DO TABULEIRO
+# DETECCAO ROBUSTA E ALINHAMENTO DE ORIENTACAO DO TABULEIRO 4x6
 # ===========================================================================
 
+def _canonicalize_corners(corners, columns, rows):
+    """Em tabuleiros par x par (como 4x6), garante que o canto [0] seja sempre
+    o canto superior-esquerdo (orientacao consistente entre frames)."""
+    c = corners.astype(np.float32).reshape(-1, 1, 2)
+    v_diag = c[-1, 0] - c[0, 0]
+    # Se a diagonal principal aponta para cima/esquerda, inverte a ordem (180 graus)
+    if (v_diag[0] + v_diag[1]) < 0:
+        c = np.ascontiguousarray(c[::-1])
+    return c
+
+
 def find_corners(gray, columns, rows):
-    """Tenta o detector SB (robusto a brilho/ruido, ja devolve subpixel).
-    Se falhar, cai no metodo classico + cornerSubPix."""
+    flags = cv.CALIB_CB_ADAPTIVE_THRESH | cv.CALIB_CB_NORMALIZE_IMAGE
+    ok, corners = cv.findChessboardCorners(gray, (columns, rows), flags)
+    if ok:
+        corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), CRITERIA)
+        return True, _canonicalize_corners(corners, columns, rows)
+
     flags_sb = cv.CALIB_CB_EXHAUSTIVE | cv.CALIB_CB_ACCURACY
     try:
         ok, corners = cv.findChessboardCornersSB(gray, (columns, rows), flags_sb)
     except cv.error:
         ok, corners = False, None
     if ok:
-        return True, corners.astype(np.float32).reshape(-1, 1, 2)
+        return True, _canonicalize_corners(corners, columns, rows)
 
-    flags = cv.CALIB_CB_ADAPTIVE_THRESH | cv.CALIB_CB_NORMALIZE_IMAGE
-    ok, corners = cv.findChessboardCorners(gray, (columns, rows), flags)
-    if not ok:
-        return False, None
-    corners = cv.cornerSubPix(gray, corners, (11, 11), (-1, -1), CRITERIA)
-    return True, corners
+    return False, None
+
+
+def align_stereo_corners(c0, c1, columns, rows):
+    """Alinha a ordem dos cantos de c1 com c0 (testando inversao de 180 graus)
+    e valida se os eixos das linhas e colunas do tabuleiro sao paralelos nas duas cameras."""
+    c0 = c0.reshape(-1, 1, 2)
+    c1_norm = c1.reshape(-1, 1, 2)
+    c1_rev = np.ascontiguousarray(c1_norm[::-1])
+
+    def axis_cosines(ca, cb):
+        r_a = ca[columns - 1, 0] - ca[0, 0]
+        r_b = cb[columns - 1, 0] - cb[0, 0]
+        d_a = ca[(rows - 1) * columns, 0] - ca[0, 0]
+        d_b = cb[(rows - 1) * columns, 0] - cb[0, 0]
+
+        nr = np.linalg.norm(r_a) * np.linalg.norm(r_b)
+        nd = np.linalg.norm(d_a) * np.linalg.norm(d_b)
+        if nr < 1e-6 or nd < 1e-6:
+            return -1.0, -1.0
+        cos_r = float(np.dot(r_a, r_b) / nr)
+        cos_d = float(np.dot(d_a, d_b) / nd)
+        return cos_r, cos_d
+
+    cos_r1, cos_d1 = axis_cosines(c0, c1_norm)
+    cos_r2, cos_d2 = axis_cosines(c0, c1_rev)
+
+    if (cos_r2 + cos_d2) > (cos_r1 + cos_d1):
+        c1_best = c1_rev
+        cos_r, cos_d = cos_r2, cos_d2
+    else:
+        c1_best = c1_norm
+        cos_r, cos_d = cos_r1, cos_d1
+
+    # Exige que ambos os eixos (linhas e colunas) estejam alinhados em ate ~35 graus (cos > 0.80)
+    if cos_r < 0.80 or cos_d < 0.80:
+        return None
+    return c1_best
 
 
 def saturation_fraction(gray, corners):
@@ -164,11 +249,10 @@ def saturation_fraction(gray, corners):
     region = gray[y0:y1, x0:x1]
     if region.size == 0:
         return 0.0
-    return float(np.mean(region >= 250))
+    return float(np.mean(region >= 252))
 
 
 def check_frame(frame, columns, rows):
-    """Retorna (corners, motivo_da_rejeicao). corners = None se rejeitado."""
     gray = cv.cvtColor(frame, cv.COLOR_BGR2GRAY)
     ok, corners = find_corners(gray, columns, rows)
     if not ok:
@@ -188,20 +272,11 @@ def board_objp():
     return scale * objp
 
 
-def order_consistent(c0, c1):
-    """Heuristica: a direcao primeiro->ultimo canto deve ser parecida nas duas cameras.
-    Se estiver invertida, o tabuleiro foi numerado ao contrario e o par envenena o stereo."""
-    v0 = (c0[-1] - c0[0]).reshape(2)
-    v1 = (c1[-1] - c1[0]).reshape(2)
-    return float(np.dot(v0, v1)) > 0
-
-
 # ===========================================================================
 # ARQUIVOS DE FRAMES
 # ===========================================================================
 
 def frames_dict(folder, name):
-    """{indice: caminho} dos arquivos <name>_<n>.png"""
     out = {}
     if not os.path.isdir(folder):
         return out
@@ -218,11 +293,11 @@ def clear_frames(folder, name):
     for p in old.values():
         os.remove(p)
     if old:
-        print(f'  {len(old)} frames antigos de {name} removidos de {folder}/ (evita misturar calibracoes).')
+        print(f'  {len(old)} frames antigos de {name} removidos de {folder}/.')
 
 
 # ===========================================================================
-# CAPTURA MONO  (SPACE = capturar, ESC = sair)
+# CAPTURA MONO E STEREO
 # ===========================================================================
 
 def save_frames_single_camera(camera_name):
@@ -244,8 +319,7 @@ def save_frames_single_camera(camera_name):
     saved_count = 0
     win_name = f'Calibracao - {camera_name}'
     status = ''
-    print(f'\n[{camera_name}] SPACE = capturar (so salva se detectar e sem reflexo)  |  ESC = sair')
-    print('  Dica: incline o tabuleiro (+-30-45 graus), cubra cantos do frame e varie a distancia.')
+    print(f'\n[{camera_name}] SPACE = capturar | ESC = sair')
 
     while True:
         frame = cam.read()
@@ -284,20 +358,13 @@ def save_frames_single_camera(camera_name):
                 print(f'  Salvo: {savename}')
                 saved_count += 1
                 status = ''
-            else:
-                print(f'  AVISO: falha ao salvar {savename}')
 
         if saved_count == number_to_save:
             break
 
     cam.stop()
     cv.destroyAllWindows()
-    print(f'  [{camera_name}] {saved_count} frames salvos.')
 
-
-# ===========================================================================
-# CAPTURA STEREO  (SPACE = capturar par, ESC = sair)
-# ===========================================================================
 
 def save_frames_two_cams(camera0_name, camera1_name):
     os.makedirs(PAIRS_DIR, exist_ok=True)
@@ -321,9 +388,7 @@ def save_frames_two_cams(camera0_name, camera1_name):
 
     saved_count = 0
     status = ''
-    print('\n[Stereo] Posicione o tabuleiro visivel nas DUAS cameras e mantenha-o PARADO ao apertar SPACE')
-    print('         (as duas cameras nao tem trigger sincronizado).')
-    print('         SPACE = capturar par  |  ESC = sair')
+    print('\n[Stereo] Segure o tabuleiro TOTALMENTE PARADO ao apertar SPACE.')
 
     while True:
         frame0 = cam0.read()
@@ -352,7 +417,6 @@ def save_frames_two_cams(camera0_name, camera1_name):
         cv.imshow('Visao Stereo Realtime', display)
 
         k = cv.waitKey(30) & 0xFF
-
         if k == 27:
             cam0.stop()
             cam1.stop()
@@ -360,27 +424,44 @@ def save_frames_two_cams(camera0_name, camera1_name):
             quit()
 
         if k == 32:
-            c0, r0 = check_frame(frame0, columns, rows)
-            c1, r1 = check_frame(frame1, columns, rows)
-            if c0 is None or c1 is None:
+            # Aguarda 80ms e rele para garantir que o tabuleiro esteja parado nas duas USB
+            c0_a, r0 = check_frame(frame0, columns, rows)
+            c1_a, r1 = check_frame(frame1, columns, rows)
+            if c0_a is None or c1_a is None:
                 status = f'REJEITADO: cam0={r0 or "ok"} | cam1={r1 or "ok"}'
                 print(f'  {status}')
                 continue
-            if not order_consistent(c0, c1):
-                status = 'REJEITADO: ordem dos cantos invertida entre as cameras'
+
+            time.sleep(0.08)
+            frame0_b = cam0.read()
+            frame1_b = cam1.read()
+            c0_b, r0_b = check_frame(frame0_b, columns, rows)
+            c1_b, r1_b = check_frame(frame1_b, columns, rows)
+            if c0_b is None or c1_b is None:
+                status = 'REJEITADO: perdeu deteccao durante captura'
+                print(f'  {status}')
+                continue
+
+            # Verifica se o tabuleiro se moveu entre as duas leituras (evita lag assincrono USB)
+            motion0 = float(np.max(np.linalg.norm(c0_a - c0_b, axis=2)))
+            motion1 = float(np.max(np.linalg.norm(c1_a - c1_b, axis=2)))
+            if motion0 > 2.0 or motion1 > 2.0:
+                status = f'REJEITADO: tabuleiro em movimento ({max(motion0, motion1):.1f}px). Segure parado!'
+                print(f'  {status}')
+                continue
+
+            c1_aligned = align_stereo_corners(c0_b, c1_b, columns, rows)
+            if c1_aligned is None:
+                status = 'REJEITADO: orientacao inconsistente entre cameras'
                 print(f'  {status}')
                 continue
 
             s0 = os.path.join(PAIRS_DIR, f'{camera0_name}_{saved_count}.png')
             s1 = os.path.join(PAIRS_DIR, f'{camera1_name}_{saved_count}.png')
-            ok0 = cv.imwrite(s0, frame0)
-            ok1 = cv.imwrite(s1, frame1)
-            if ok0 and ok1:
-                print(f'  Par {saved_count} salvo.')
+            if cv.imwrite(s0, frame0_b) and cv.imwrite(s1, frame1_b):
+                print(f'  Par {saved_count} salvo (movimento={max(motion0, motion1):.2f}px).')
                 saved_count += 1
                 status = ''
-            else:
-                print(f'  AVISO: falha ao salvar par {saved_count}. Tente novamente.')
 
         if saved_count == number_to_save:
             break
@@ -388,30 +469,11 @@ def save_frames_two_cams(camera0_name, camera1_name):
     cam0.stop()
     cam1.stop()
     cv.destroyAllWindows()
-    print(f'  {saved_count} pares salvos.')
 
 
 # ===========================================================================
-# REJEICAO DE OUTLIERS / DIAGNOSTICOS
+# DIAGNOSTICOS E PODA DE OUTLIERS
 # ===========================================================================
-
-def select_inliers(errs, labels):
-    """Retorna mascara booleana de frames a manter, baseada em erro de reprojecao."""
-    errs = np.asarray(errs, dtype=np.float64)
-    factor = float(cfg('outlier_factor', 2.0))
-    min_px = float(cfg('outlier_min_px', 0.5))
-    thr = max(factor * float(np.median(errs)), min_px)
-    keep = errs <= thr
-    if keep.all():
-        return keep
-    if keep.sum() < MIN_VIEWS:
-        print(f'  [AVISO] Rejeicao cancelada: restariam {int(keep.sum())} frames (< {MIN_VIEWS}). '
-              f'Capture mais frames com boa qualidade.')
-        return np.ones_like(keep, dtype=bool)
-    for i in np.where(~keep)[0]:
-        print(f'  Outlier removido: {labels[i]}  erro={errs[i]:.3f}px  (limite {thr:.3f}px)')
-    return keep
-
 
 def per_view_errors(objpoints, imgpoints, rvecs, tvecs, K, dist):
     errs = []
@@ -423,7 +485,6 @@ def per_view_errors(objpoints, imgpoints, rvecs, tvecs, K, dist):
 
 
 def coverage_report(imgpoints, size, name):
-    """Quantas das 9 regioes (grid 3x3) do frame tiveram o centro do tabuleiro."""
     w, h = size
     hit = set()
     for ip in imgpoints:
@@ -431,123 +492,134 @@ def coverage_report(imgpoints, size, name):
         gx = min(int(3 * cx / w), 2)
         gy = min(int(3 * cy / h), 2)
         hit.add((gx, gy))
-    msg = f'  [{name}] Cobertura do frame: {len(hit)}/9 regioes.'
-    if len(hit) < 6:
-        msg += '  <-- POUCA. Mova o tabuleiro para os cantos.'
-    print(msg)
+    print(f'  [{name}] Cobertura do frame: {len(hit)}/9 regioes.')
 
 
 def check_intrinsics(K, size, name):
     w, h = size
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
     print(f'  [{name}] fx={fx:.1f} fy={fy:.1f} cx={cx:.1f} cy={cy:.1f}  (centro ideal ~ {w / 2:.0f},{h / 2:.0f})')
-    if abs(cx - w / 2) > 0.10 * w or abs(cy - h / 2) > 0.10 * h:
-        print(f'  [AVISO {name}] Ponto principal longe do centro (>10%). Provavel calibracao ruim '
-              f'(reflexo, pouca variedade de pose) ou resolucao diferente da de runtime.')
-    if max(fx, fy) / min(fx, fy) > 1.05:
-        print(f'  [AVISO {name}] fx e fy diferem >5%. Pixel deveria ser quadrado: '
-              f'sinal de poucas poses/tabuleiro muito frontal.')
+
+
+def compute_epipolar_y_error(imgpoints_l, imgpoints_r, K0, D0, K1, D1, R1, P1, R2, P2):
+    """Mede o desalinhamento vertical real (em pixels) nas imagens retificadas."""
+    y_diffs = []
+    for pts_l, pts_r in zip(imgpoints_l, imgpoints_r):
+        u_l = cv.undistortPoints(pts_l, K0, D0, R=R1, P=P1).reshape(-1, 2)
+        u_r = cv.undistortPoints(pts_r, K1, D1, R=R2, P=P2).reshape(-1, 2)
+        y_diffs.append(np.abs(u_l[:, 1] - u_r[:, 1]))
+    all_diffs = np.concatenate(y_diffs)
+    return float(np.mean(all_diffs)), float(np.percentile(all_diffs, 95))
 
 
 # ===========================================================================
-# CALIBRACAO INTRINSECA
+# CALIBRACAO INTRINSECA COM PROTECAO DE FOCO FISICO
 # ===========================================================================
+
+def _calibrate_mono_constrained(objpoints, imgpoints, size, f_guess):
+    w, h = size
+    K_init = np.array([[f_guess, 0.0, w / 2.0],
+                       [0.0, f_guess, h / 2.0],
+                       [0.0, 0.0, 1.0]], dtype=np.float64)
+
+    # 1. Tenta otimizar fx=fy livre a partir do chute inicial
+    flags_free = (cv.CALIB_USE_INTRINSIC_GUESS |
+                  cv.CALIB_FIX_ASPECT_RATIO |
+                  cv.CALIB_ZERO_TANGENT_DIST |
+                  cv.CALIB_FIX_K2 |
+                  cv.CALIB_FIX_K3)
+    ret, K, D, rvecs, tvecs = cv.calibrateCamera(
+        objpoints, imgpoints, size, K_init.copy(), None, flags=flags_free, criteria=CRITERIA
+    )
+
+    fx, cx, cy = K[0, 0], K[0, 2], K[1, 2]
+    # Verifica se o solver explodiu a distancia focal (ex: > 2000px) ou jogou cx,cy para fora
+    if not (450.0 <= fx <= 1800.0) or abs(cx - w / 2.0) > 0.20 * w or abs(cy - h / 2.0) > 0.20 * h:
+        # 2. Fallback fisico: busca na grade de focos fisicos reais travando CALIB_FIX_FOCAL_LENGTH
+        best = None
+        for f_cand in FOCAL_GRID_PX:
+            K_c = np.array([[f_cand, 0.0, w / 2.0],
+                            [0.0, f_cand, h / 2.0],
+                            [0.0, 0.0, 1.0]], dtype=np.float64)
+            flags_lock = (cv.CALIB_USE_INTRINSIC_GUESS |
+                          cv.CALIB_FIX_FOCAL_LENGTH |
+                          cv.CALIB_FIX_PRINCIPAL_POINT |
+                          cv.CALIB_ZERO_TANGENT_DIST |
+                          cv.CALIB_FIX_K2 |
+                          cv.CALIB_FIX_K3)
+            r_c, K_out, D_out, rv_c, tv_c = cv.calibrateCamera(
+                objpoints, imgpoints, size, K_c, None, flags=flags_lock, criteria=CRITERIA
+            )
+            if best is None or r_c < best[0]:
+                best = (r_c, K_out, D_out, rv_c, tv_c)
+        ret, K, D, rvecs, tvecs = best
+
+    return ret, K, D, rvecs, tvecs
+
 
 def calibrate_camera_for_intrinsic_parameters(camera_name):
-    cam_frames = frames_dict(FRAMES_DIR, camera_name)
-    if not cam_frames:
-        print(f'Nenhuma imagem encontrada para {camera_name} em {FRAMES_DIR}/')
+    # Combina frames de frames/ e frames_pair/ para maxima cobertura geometrica
+    cam_frames = list(frames_dict(FRAMES_DIR, camera_name).items())
+    pair_frames = list(frames_dict(PAIRS_DIR, camera_name).items())
+
+    all_items = [(f'mono_{i}', p) for i, p in sorted(cam_frames)] + \
+                [(f'pair_{i}', p) for i, p in sorted(pair_frames)]
+
+    if not all_items:
+        print(f'Nenhuma imagem encontrada para {camera_name}')
         quit()
 
     rows = cfg('checkerboard_rows')
     columns = cfg('checkerboard_columns')
-    manual = bool(cfg('manual_review', False))
     objp = board_objp()
 
     objpoints, imgpoints, labels = [], [], []
     size = None
 
-    for idx in sorted(cam_frames):
-        path = cam_frames[idx]
+    for label, path in all_items:
         img = cv.imread(path, 1)
         if img is None:
             continue
         if size is None:
             size = (img.shape[1], img.shape[0])
         elif (img.shape[1], img.shape[0]) != size:
-            print(f'  {path}: tamanho diferente dos demais, ignorado.')
             continue
 
-        corners, reason = check_frame(img, columns, rows)
+        corners, _ = check_frame(img, columns, rows)
         if corners is None:
-            print(f'  {path}: {reason}. Ignorado.')
             continue
-
-        if manual:
-            disp = img.copy()
-            cv.drawChessboardCorners(disp, (columns, rows), corners, True)
-            cv.putText(disp, f'{path}  S=pular  outra tecla=aceitar',
-                       (20, 30), cv.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-            cv.imshow('Verificacao intrinseca', cv.resize(disp, None, fx=0.6, fy=0.6))
-            k = cv.waitKey(WAITKEY_TIMEOUT_MS) & 0xFF
-            if k == ord('s'):
-                print(f'  {path} pulado.')
-                continue
 
         objpoints.append(objp)
         imgpoints.append(corners)
-        labels.append(os.path.basename(path))
+        labels.append(label)
 
-    cv.destroyAllWindows()
-
-    if len(objpoints) < 3:
-        print('Poucos frames validos. Capture mais imagens.')
+    if len(objpoints) < 4:
+        print(f'Poucos frames validos para {camera_name}.')
         quit()
 
-    width, height = size
-    coverage_report(imgpoints, size, camera_name)
+    f_guess = float(cfg('focal_guess_px', 950.0))
 
-    # Flags: trava K3 e tangencial (evita que a matematica exploda)
-    flags = cv.CALIB_FIX_K3 | cv.CALIB_ZERO_TANGENT_DIST
-    fix_pp = bool(cfg('fix_principal_point', False))
-    fix_ar = bool(cfg('fix_aspect_ratio', False))
-    K_init = None
-    if fix_pp or fix_ar:
-        f_guess = float(cfg('focal_guess_px', width))
-        K_init = np.array([[f_guess, 0, width / 2.0],
-                           [0, f_guess, height / 2.0],
-                           [0, 0, 1.0]], dtype=np.float64)
-        flags |= cv.CALIB_USE_INTRINSIC_GUESS
-        if fix_pp:
-            flags |= cv.CALIB_FIX_PRINCIPAL_POINT
-        if fix_ar:
-            flags |= cv.CALIB_FIX_ASPECT_RATIO
-
-    it = 0
-    while True:
-        K0 = None if K_init is None else K_init.copy()
-        ret, cmtx, dist, rvecs, tvecs = cv.calibrateCamera(
-            objpoints, imgpoints, (width, height), K0, None, flags=flags)
+    # Poda iterativa Leave-Worst-Out (remove o pior frame um por um se erro > 1.0px)
+    while len(objpoints) > MIN_VIEWS:
+        ret, cmtx, dist, rvecs, tvecs = _calibrate_mono_constrained(objpoints, imgpoints, size, f_guess)
         errs = per_view_errors(objpoints, imgpoints, rvecs, tvecs, cmtx, dist)
-        keep = select_inliers(errs, labels)
-        if keep.all() or it >= MAX_REJECT_PASSES - 1:
+        worst_idx = int(np.argmax(errs))
+        if errs[worst_idx] <= max(1.0, 2.0 * float(np.median(errs))):
             break
-        objpoints = [o for o, k in zip(objpoints, keep) if k]
-        imgpoints = [p for p, k in zip(imgpoints, keep) if k]
-        labels = [l for l, k in zip(labels, keep) if k]
-        it += 1
+        print(f'  [{camera_name}] Outlier mono removido ({labels[worst_idx]}): erro={errs[worst_idx]:.2f}px')
+        objpoints.pop(worst_idx)
+        imgpoints.pop(worst_idx)
+        labels.pop(worst_idx)
 
-    print(f'  [{camera_name}] {len(objpoints)} frames usados. RMSE global: {ret:.4f}  '
-          f'| erro/frame: mediana={np.median(errs):.3f}px max={errs.max():.3f}px  '
-          f'(bom < 1.0, otimo < 0.5)')
-    print(f'  Distorcao: {dist}')
-    check_intrinsics(cmtx, (width, height), camera_name)
-    return cmtx, dist, (width, height)
+    ret, cmtx, dist, rvecs, tvecs = _calibrate_mono_constrained(objpoints, imgpoints, size, f_guess)
+    errs = per_view_errors(objpoints, imgpoints, rvecs, tvecs, cmtx, dist)
 
+    coverage_report(imgpoints, size, camera_name)
+    print(f'  [{camera_name}] {len(objpoints)} frames usados. RMSE mono: {ret:.4f} '
+          f'(mediana={np.median(errs):.3f}px, max={errs.max():.3f}px)')
+    check_intrinsics(cmtx, size, camera_name)
+    return cmtx, dist, size
 
-# ===========================================================================
-# SALVAR INTRINSECOS
-# ===========================================================================
 
 def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
     os.makedirs(PARAMS_DIR, exist_ok=True)
@@ -558,12 +630,24 @@ def save_camera_intrinsics(camera_matrix, distortion_coefs, camera_name):
             f.write(' '.join(str(v) for v in row) + '\n')
         f.write('distortion:\n')
         f.write(' '.join(str(v) for v in distortion_coefs.flatten()) + '\n')
-    print(f'  Intrinsecos salvos: {out}')
 
 
 # ===========================================================================
-# CALIBRACAO STEREO
+# CALIBRACAO STEREO CONJUNTA (BUNDLE ADJUSTMENT + LEAVE-WORST-OUT)
 # ===========================================================================
+
+def _run_stereo_candidate(objpoints, imgpoints_l, imgpoints_r, size, K0_init, D0_init, K1_init, D1_init, flags):
+    res = cv.stereoCalibrateExtended(
+        objpoints, imgpoints_l, imgpoints_r,
+        K0_init.copy(), D0_init.copy(), K1_init.copy(), D1_init.copy(),
+        size, None, None,
+        flags=flags,
+        criteria=CRITERIA
+    )
+    ret, K0, D0, K1, D1, R, T, E, F, rvecs, tvecs, pve = res
+    pair_errs = np.asarray(pve, dtype=np.float64).reshape(-1, 2).max(axis=1)
+    return ret, K0, D0, K1, D1, R, T, pair_errs
+
 
 def stereo_calibrate(mtx0, dist0, mtx1, dist1, name0, name1, mono_size):
     d0 = frames_dict(PAIRS_DIR, name0)
@@ -573,15 +657,13 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, name0, name1, mono_size):
     if not common:
         print('Frames stereo nao encontrados.')
         quit()
-    if len(d0) != len(d1):
-        print(f'  AVISO: pares desiguais ({len(d0)} vs {len(d1)}). Usando {len(common)} em comum.')
 
     rows = cfg('checkerboard_rows')
     columns = cfg('checkerboard_columns')
-    manual = bool(cfg('manual_review', False))
     objp = board_objp()
 
     objpoints, imgpoints_left, imgpoints_right, labels = [], [], [], []
+    sample_frames = None
     size = None
 
     for idx in common:
@@ -592,88 +674,154 @@ def stereo_calibrate(mtx0, dist0, mtx1, dist1, name0, name1, mono_size):
         s0 = (frame0.shape[1], frame0.shape[0])
         s1 = (frame1.shape[1], frame1.shape[0])
         if s0 != s1:
-            print(f'  Par {idx}: tamanhos diferentes entre cameras {s0} vs {s1}. Pulando.')
             continue
         if size is None:
             size = s0
-        elif s0 != size:
-            print(f'  Par {idx}: tamanho diferente dos demais. Pulando.')
-            continue
 
         c0, r0 = check_frame(frame0, columns, rows)
         c1, r1 = check_frame(frame1, columns, rows)
         if c0 is None or c1 is None:
-            print(f'  Par {idx}: cam0={r0 or "ok"} | cam1={r1 or "ok"}. Pulando.')
-            continue
-        if not order_consistent(c0, c1):
-            print(f'  Par {idx}: ordem dos cantos invertida entre cameras. Pulando.')
+            print(f'  Par {idx} ignorado: cam0={r0 or "ok"} | cam1={r1 or "ok"}')
             continue
 
-        if manual:
-            disp0, disp1 = frame0.copy(), frame1.copy()
-            cv.drawChessboardCorners(disp0, (columns, rows), c0, True)
-            cv.drawChessboardCorners(disp1, (columns, rows), c1, True)
-            cv.putText(disp0, f'Par {idx}  S=pular  outra=aceitar',
-                       (20, 30), cv.FONT_HERSHEY_SIMPLEX, 0.65, (0, 0, 255), 2)
-            both = np.hstack([cv.resize(disp0, None, fx=0.6, fy=0.6),
-                              cv.resize(disp1, None, fx=0.6, fy=0.6)])
-            cv.imshow('Stereo Validation', both)
-            k = cv.waitKey(WAITKEY_TIMEOUT_MS) & 0xFF
-            if k == ord('s'):
-                print(f'  Par {idx} pulado.')
-                continue
+        c1_aligned = align_stereo_corners(c0, c1, columns, rows)
+        if c1_aligned is None:
+            print(f'  Par {idx} ignorado: eixos do tabuleiro desalinhados entre cam0 e cam1.')
+            continue
 
         objpoints.append(objp)
         imgpoints_left.append(c0)
-        imgpoints_right.append(c1)
-        labels.append(f'par {idx}')
+        imgpoints_right.append(c1_aligned)
+        labels.append(f'par_{idx}')
+        if sample_frames is None:
+            sample_frames = (frame0, frame1)
 
-    cv.destroyAllWindows()
-
-    if len(objpoints) < 3:
+    if len(objpoints) < 5:
         print('Poucos pares validos para calibracao stereo.')
         quit()
 
-    if size != mono_size:
-        print(f'  [ERRO] Resolucao dos pares stereo {size} != resolucao das intrinsecas {mono_size}. '
-              f'As intrinsecas nao valem para essas imagens.')
+    w, h = size
+    # Forca ambas as cameras a partirem da mesma escala focal no stereo
+    f_avg = float(np.clip(0.5 * (mtx0[0, 0] + mtx1[0, 0]), 550.0, 1500.0))
+    K_shared = np.array([[f_avg, 0.0, w / 2.0],
+                         [0.0, f_avg, h / 2.0],
+                         [0.0, 0.0, 1.0]], dtype=np.float64)
+    D_zero = np.zeros((1, 5), dtype=np.float64)
+
+    flags_joint = (cv.CALIB_USE_INTRINSIC_GUESS |
+                   cv.CALIB_SAME_FOCAL_LENGTH |
+                   cv.CALIB_FIX_ASPECT_RATIO |
+                   cv.CALIB_ZERO_TANGENT_DIST |
+                   cv.CALIB_FIX_K2 |
+                   cv.CALIB_FIX_K3)
+
+    # 1. Poda iterativa Leave-Worst-Out: remove um par por vez se estiver puxando o RMSE para cima
+    print(f'  Iniciando otimizacao stereo conjunta com {len(objpoints)} pares...')
+    while len(objpoints) > MIN_VIEWS:
+        ret, K0, D0, K1, D1, R, T, pair_errs = _run_stereo_candidate(
+            objpoints, imgpoints_left, imgpoints_right, size,
+            K_shared, D_zero, K_shared, D_zero, flags_joint
+        )
+        worst_idx = int(np.argmax(pair_errs))
+        worst_err = float(pair_errs[worst_idx])
+        med_err = float(np.median(pair_errs))
+
+        # Para de remover quando o RMSE global for < 0.75px e nenhum par passar de max(1.2px, 2.2*mediana)
+        if ret <= 0.75 and worst_err <= max(1.2, 2.2 * med_err):
+            break
+        if worst_err <= 0.85:
+            break
+
+        print(f'  [PODANDO OUTLIER STEREO] Removendo {labels[worst_idx]} '
+              f'(erro={worst_err:.2f}px | mediana={med_err:.2f}px | RMSE={ret:.2f}px)')
+        objpoints.pop(worst_idx)
+        imgpoints_left.pop(worst_idx)
+        imgpoints_right.pop(worst_idx)
+        labels.pop(worst_idx)
+
+    # 2. Testa os candidatos de distancia focal na grade fisica + otimizacao conjunta para garantir |Tz| << |Tx|
+    best_solution = None
+    best_score = 1e9
+
+    candidates_to_test = [('joint_free', flags_joint, f_avg)]
+    for f_cand in FOCAL_GRID_PX:
+        flags_grid = (cv.CALIB_USE_INTRINSIC_GUESS |
+                      cv.CALIB_FIX_FOCAL_LENGTH |
+                      cv.CALIB_FIX_PRINCIPAL_POINT |
+                      cv.CALIB_ZERO_TANGENT_DIST |
+                      cv.CALIB_FIX_K2 |
+                      cv.CALIB_FIX_K3)
+        candidates_to_test.append((f'grid_f={f_cand:.0f}', flags_grid, f_cand))
+
+    for tag, flg, f_val in candidates_to_test:
+        K_init = np.array([[f_val, 0.0, w / 2.0],
+                           [0.0, f_val, h / 2.0],
+                           [0.0, 0.0, 1.0]], dtype=np.float64)
+        try:
+            ret, K0, D0, K1, D1, R, T, pair_errs = _run_stereo_candidate(
+                objpoints, imgpoints_left, imgpoints_right, size,
+                K_init, D_zero, K_init, D_zero, flg
+            )
+        except cv.error:
+            continue
+
+        fx0, fx1 = float(K0[0, 0]), float(K1[0, 0])
+        tx, ty, tz = float(T[0, 0]), float(T[1, 0]), float(T[2, 0])
+        if not (450.0 <= fx0 <= 1850.0 and 450.0 <= fx1 <= 1850.0):
+            continue
+        if abs(tx) < 1e-4:
+            continue
+
+        R1r, R2r, P1, P2, Q, _, _ = cv.stereoRectify(
+            K0, D0, K1, D1, size, R, T, flags=cv.CALIB_ZERO_DISPARITY, alpha=0
+        )
+        epi_mean, epi_p95 = compute_epipolar_y_error(
+            imgpoints_left, imgpoints_right, K0, D0, K1, D1, R1r, P1, R2r, P2
+        )
+
+        tz_ratio = abs(tz) / max(abs(tx), 1e-6)
+        # Penaliza fortemente qualquer solucao que tente jogar Tz > 25% do baseline Tx
+        tz_penalty = 15.0 * max(0.0, tz_ratio - 0.25)
+        score = ret + 1.5 * epi_mean + tz_penalty
+
+        if score < best_score:
+            best_score = score
+            best_solution = (tag, ret, K0, D0, K1, D1, R, T, pair_errs, epi_mean, epi_p95, R1r, R2r, P1, P2)
+
+    if best_solution is None:
+        print('[ERRO] Nao foi possivel encontrar solucao stereo fisicamente valida.')
         quit()
 
-    coverage_report(imgpoints_left, size, 'stereo cam0')
-    coverage_report(imgpoints_right, size, 'stereo cam1')
-    print(f'  Calibrando com {len(objpoints)} pares validos...')
+    tag, ret, K0, D0, K1, D1, R, T, pair_errs, epi_mean, epi_p95, R1r, R2r, P1, P2 = best_solution
 
-    it = 0
-    while True:
-        res = cv.stereoCalibrateExtended(
-            objpoints, imgpoints_left, imgpoints_right,
-            mtx0.copy(), dist0.copy(), mtx1.copy(), dist1.copy(),
-            size, None, None,
-            flags=cv.CALIB_FIX_INTRINSIC,
-            criteria=CRITERIA)
-        ret, _, _, _, _, R, T, E, F, rvecs, tvecs, pve = res
-        errs = np.asarray(pve).reshape(-1, 2).max(axis=1)
-        keep = select_inliers(errs, labels)
-        if keep.all() or it >= MAX_REJECT_PASSES - 1:
-            break
-        objpoints = [o for o, k in zip(objpoints, keep) if k]
-        imgpoints_left = [p for p, k in zip(imgpoints_left, keep) if k]
-        imgpoints_right = [p for p, k in zip(imgpoints_right, keep) if k]
-        labels = [l for l, k in zip(labels, keep) if k]
-        it += 1
+    print(f'\n  >>> Solucao selecionada: [{tag}] com {len(objpoints)} pares inliers')
+    print(f'  >>> RMSE stereo: {ret:.4f} px (mediana={np.median(pair_errs):.3f}px, max={pair_errs.max():.3f}px)')
+    print(f'  >>> Erro epipolar vertical retificado |y_L - y_R|: media={epi_mean:.3f}px (95%={epi_p95:.3f}px)')
+    print(f'  >>> Intrinsecos finais: f0={K0[0,0]:.1f}px, f1={K1[0,0]:.1f}px, cx={K0[0,2]:.1f}, cy={K0[1,2]:.1f}')
+    print(f'  >>> Baseline ||T||: {np.linalg.norm(T)*100:.2f} cm  |  T = [{T[0,0]:.4f}, {T[1,0]:.4f}, {T[2,0]:.4f}] m')
 
-    print(f'  {len(objpoints)} pares usados. RMSE stereo: {ret:.4f}  '
-          f'| erro/par: mediana={np.median(errs):.3f}px max={errs.max():.3f}px  '
-          f'(bom < 1.0, otimo < 0.5)')
-    print(f'  Baseline: {np.linalg.norm(T):.4f} (mesma unidade de checkerboard_box_size_scale)')
-    print(f'  R:\n{R}')
-    print(f'  T: {T.flatten()}')
-    print('  Convencao OpenCV: x_cam1 = R * x_cam0 + T')
-    return R, T
+    if T[0, 0] > 0:
+        print('  [NOTA] Tx > 0: nos frames salvos, camera0 esta a DIREITA da camera1 (o pipeline trata isso automaticamente).')
+
+    # Salva imagem de verificacao da retificacao com linhas epipolares horizontais
+    if sample_frames is not None:
+        os.makedirs(PARAMS_DIR, exist_ok=True)
+        m1x, m1y = cv.initUndistortRectifyMap(K0, D0, R1r, P1, size, cv.CV_32FC1)
+        m2x, m2y = cv.initUndistortRectifyMap(K1, D1, R2r, P2, size, cv.CV_32FC1)
+        rl = cv.remap(sample_frames[0], m1x, m1y, cv.INTER_LINEAR)
+        rr = cv.remap(sample_frames[1], m2x, m2y, cv.INTER_LINEAR)
+        canvas = np.hstack([rl, rr])
+        for y_line in range(40, size[1], 40):
+            cv.line(canvas, (0, y_line), (size[0] * 2, y_line), (0, 255, 0), 1)
+        check_path = os.path.join(PARAMS_DIR, 'rectification_check.png')
+        cv.imwrite(check_path, canvas)
+        print(f'  >>> Imagem de verificacao salva em: {check_path}')
+
+    return K0, D0, K1, D1, R, T
 
 
 # ===========================================================================
-# UTILITARIOS
+# EXPORTACAO DE ARQUIVOS E SNIPPET
 # ===========================================================================
 
 def save_extrinsic_calibration_parameters(R0, T0, R1, T1, prefix=''):
@@ -687,16 +835,10 @@ def save_extrinsic_calibration_parameters(R0, T0, R1, T1, prefix=''):
             f.write('T:\n')
             for v in T.flatten():
                 f.write(str(v) + '\n')
-        print(f'  Extrinsecos salvos: {filename}')
 
     write_rt(os.path.join(PARAMS_DIR, prefix + 'camera0_rot_trans.dat'), R0, T0)
     write_rt(os.path.join(PARAMS_DIR, prefix + 'camera1_rot_trans.dat'), R1, T1)
-    return R0, T0, R1, T1
 
-
-# ===========================================================================
-# EXPORTA SNIPPET PRONTO PRA COLAR NO load_params()
-# ===========================================================================
 
 def _fmt_np(name, M):
     M = np.atleast_2d(np.asarray(M, dtype=np.float64))
@@ -744,21 +886,18 @@ def export_load_params_snippet(cmtx0, dist0, cmtx1, dist1, R, T,
 # ===========================================================================
 
 if __name__ == '__main__':
-
     args = [a for a in sys.argv[1:] if not a.startswith('--')]
-    reuse = '--reuse-frames' in sys.argv[1:]
+    migrate = '--migrate-old-frames' in sys.argv[1:]
+    reuse = ('--reuse-frames' in sys.argv[1:]) or migrate
 
     if len(args) != 1:
-        print('Uso: python3 calib.py calibration_settings.yaml [--reuse-frames]')
+        print('Uso: python3 calib.py calibration_settings.yaml [--reuse-frames | --migrate-old-frames]')
         quit()
 
     parse_calibration_settings_file(args[0])
 
-    scale = calibration_settings['checkerboard_box_size_scale']
-    if scale >= 1.0:
-        print(f'\n[AVISO] checkerboard_box_size_scale = {scale}')
-        print('        Para profundidade em metros, use o tamanho real do quadrado em metros.')
-        print('        Ex: quadrado de 25mm -> 0.025\n')
+    if migrate:
+        migrate_old_frames_on_disk()
 
     if reuse:
         print('\n[--reuse-frames] Pulando capturas; usando frames em disco.')
@@ -767,12 +906,9 @@ if __name__ == '__main__':
         save_frames_single_camera('camera0')
         save_frames_single_camera('camera1')
 
-    print('\n=== PASSO 2: Calibracao intrinseca ===')
+    print('\n=== PASSO 2: Calibracao intrinseca inicial ===')
     cmtx0, dist0, size0 = calibrate_camera_for_intrinsic_parameters('camera0')
-    save_camera_intrinsics(cmtx0, dist0, 'camera0')
-
     cmtx1, dist1, size1 = calibrate_camera_for_intrinsic_parameters('camera1')
-    save_camera_intrinsics(cmtx1, dist1, 'camera1')
 
     if size0 != size1:
         print(f'[ERRO] Resolucoes diferentes entre cameras: {size0} vs {size1}')
@@ -782,10 +918,14 @@ if __name__ == '__main__':
         print('\n=== PASSO 3: Pares sincronizados ===')
         save_frames_two_cams('camera0', 'camera1')
 
-    print('\n=== PASSO 4: Calibracao stereo ===')
-    R, T = stereo_calibrate(cmtx0, dist0, cmtx1, dist1, 'camera0', 'camera1', size0)
+    print('\n=== PASSO 4: Calibracao stereo conjunta ===')
+    cmtx0, dist0, cmtx1, dist1, R, T = stereo_calibrate(
+        cmtx0, dist0, cmtx1, dist1, 'camera0', 'camera1', size0
+    )
 
-    print('\n=== PASSO 5: Salvar extrinsecos ===')
+    print('\n=== PASSO 5: Salvar intrinsecos e extrinsecos ===')
+    save_camera_intrinsics(cmtx0, dist0, 'camera0')
+    save_camera_intrinsics(cmtx1, dist1, 'camera1')
     R0 = np.eye(3, dtype=np.float32)
     T0 = np.zeros((3, 1), dtype=np.float32)
     save_extrinsic_calibration_parameters(R0, T0, R, T)
