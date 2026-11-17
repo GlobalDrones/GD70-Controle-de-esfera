@@ -6,10 +6,10 @@ from serial_communication import telemetria_dados  # noqa: F401
 
 
 # ===========================================================================
-# PRE-PROCESSAMENTO E CONFIGURACOES
+# PRE-PROCESSAMENTO E CONFIGURACOES ANTI-SOMBRA
 # ===========================================================================
 
-CLAHE_CLIP_LIMIT = 2.0
+CLAHE_CLIP_LIMIT = 1.4           # Reduzido de 2.0 para não amplificar sombras suaves no fundo
 CLAHE_TILE_GRID_SIZE = (8, 8)
 
 clahe = cv2.createCLAHE(
@@ -18,38 +18,36 @@ clahe = cv2.createCLAHE(
 )
 
 USE_ADAPTIVE_THRESHOLD = True
-ADAPTIVE_BLOCK_SIZE = 51
-ADAPTIVE_C = 8
-THRESHOLD_VALUE = 60
+ADAPTIVE_BLOCK_SIZE = 21         # Janela mais justa (era 51) para ignorar sombras largas
+ADAPTIVE_C = 10                  # Mais rigoroso (era 8) contra penumbras
 
-MAX_CANDIDATE_LINES = 20
+# --- FILTROS ANTI-SOMBRA (BLACK-HAT + ESPESSURA + VALE BILATERAL) ---
+BLACKHAT_KERNEL_BASE = 23        # Largura máxima do filtro Black-Hat na escala 1.0 (apaga sombras largas)
+BLACKHAT_MIN_PROMINENCE = 12     # Contraste mínimo (0..255) do cabo no Black-Hat
+MIN_ROPE_RADIUS_BASE = 1.1       # Meia-espessura mínima da corda (px)
+MAX_ROPE_RADIUS_BASE = 9.5       # Meia-espessura máxima da corda na escala 1.0 (px) — bloqueia manchas/sombras
+VALLEY_MIN_BILATERAL_DIFF = 7.5  # Diferença mínima de brilho exigida nos DOIS lados da reta (elimina borda de sombra)
+
+MAX_CANDIDATE_LINES = 10
 MIN_LINE_LENGTH_FACTOR = 0.3
 
-# Agrupamento estrito das duas bordas da mesma corda
-CLUSTER_ANGLE_TOL_DEG = 8.0
+# Agrupamento de segmentos colineares da mesma crista central
+CLUSTER_ANGLE_TOL_DEG = 10.0
 CLUSTER_RHO_TOL_PX = 12.0
+RIDGE_CORRIDOR_HALF_PX = 8
 
-# Limites geométricos amplos para NUNCA descartar uma linha válida como 2D
-MAX_DISTANCE = 6.0               # Aceita até 6.0m sem derrubar para "SEM PROFUNDIDADE"
+# Limites geométricos amplos (nunca descarta uma linha válida como 2D)
+MAX_DISTANCE = 6.0
 MIN_DISTANCE = 0.15
-MIN_PLANE_SINE = 0.015           # Permite interseção de planos mesmo em ângulos rasos
+MIN_PLANE_SINE = 0.015
 MIN_COMMON_SEGMENT_LENGTH = 0.02
 MIN_RAY_DEPTH = 0.05
 
+# Distância de convergência digital ("envesgamento digital" em metros).
+DIGITAL_CONVERGENCE_DIST_M = 2.2
+
 DISTANCE_SAMPLES = 30
-
-# Configurações do SGBM + WLS restrito à ROI e Vizinhança da Linha
-USE_ROI_SGBM = True
-USE_WLS_FILTER = True
-SGBM_NUM_DISP_BASE = 64
-SGBM_BLOCK_SIZE = 3
-WLS_LAMBDA = 8000.0
-WLS_SIGMA_COLOR = 1.5
-
-# Espessura da vizinhança ao redor da linha (px) e faixa dos maiores valores de disparidade
-SGBM_NEIGHBORHOOD_THICKNESS = 15
-TOP_DISP_PERCENTILE_MIN = 65.0
-TOP_DISP_PERCENTILE_MAX = 96.0
+SCANLINE_HALF_WIN_PX = 10
 
 # Filtro temporal
 TEMPORAL_WINDOW = 7
@@ -61,28 +59,35 @@ _prev_bearing_r = None
 _last_valid_distance = -1.0
 
 
-def preprocessar_imagem(frame):
-    gray = cv2.cvtColor(frame, cv2.COLOR_BGR2GRAY)
+def _preprocessar_recorte(crop_bgr, scale=0.5):
+    """
+    Combina filtro Morfológico Black-Hat (que suprime sombras largas e fundos escuros)
+    com Adaptive Threshold de janela curta APENAS no recorte da ROI.
+    """
+    gray = cv2.cvtColor(crop_bgr, cv2.COLOR_BGR2GRAY)
     enhanced = clahe.apply(gray)
+    blurred = cv2.GaussianBlur(enhanced, (5, 5), 0)
 
-    blurred = cv2.GaussianBlur(
-        enhanced,
-        (5, 5),
-        0
+    # 1. Filtro Black-Hat: destaca apenas estruturas escuras MAIS FINAS que k_bh.
+    # Sombras largas e paredes escuras desaparecem (ficam com valor ~0).
+    k_bh = max(9, int(round(BLACKHAT_KERNEL_BASE * max(scale, 0.35))) | 1)
+    kernel_bh = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (k_bh, k_bh))
+    blackhat = cv2.morphologyEx(blurred, cv2.MORPH_BLACKHAT, kernel_bh)
+
+    _, mask_bh = cv2.threshold(
+        blackhat,
+        BLACKHAT_MIN_PROMINENCE,
+        255,
+        cv2.THRESH_BINARY
     )
 
+    # 2. Threshold adaptativo de janela curta (rejeita gradientes lentos de penumbra)
     if USE_ADAPTIVE_THRESHOLD:
-        block_size = ADAPTIVE_BLOCK_SIZE
-        if block_size % 2 == 0:
-            block_size += 1
-
-        block_size = min(
-            block_size,
-            min(frame.shape[:2]) // 2 * 2 - 1
-        )
+        block_size = max(11, int(round(ADAPTIVE_BLOCK_SIZE * max(scale, 0.5))) | 1)
+        block_size = min(block_size, min(crop_bgr.shape[:2]) // 2 * 2 - 1)
         block_size = max(block_size, 3)
 
-        bin_img = cv2.adaptiveThreshold(
+        bin_adapt = cv2.adaptiveThreshold(
             blurred,
             255,
             cv2.ADAPTIVE_THRESH_GAUSSIAN_C,
@@ -90,22 +95,26 @@ def preprocessar_imagem(frame):
             block_size,
             ADAPTIVE_C
         )
+        # Só aceita como cabo se passar TANTO no Adaptive Threshold QUANTO no Black-Hat
+        bin_crop = cv2.bitwise_and(bin_adapt, mask_bh)
     else:
-        _, bin_img = cv2.threshold(
-            blurred,
-            THRESHOLD_VALUE,
-            255,
-            cv2.THRESH_BINARY_INV
-        )
+        bin_crop = mask_bh
 
-    kernel = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
-    bin_img = cv2.morphologyEx(bin_img, cv2.MORPH_CLOSE, kernel)
+    # Remove ruídos puntiformes isolados e fecha micro-falhas na corda
+    kernel_clean = cv2.getStructuringElement(cv2.MORPH_ELLIPSE, (3, 3))
+    bin_crop = cv2.morphologyEx(bin_crop, cv2.MORPH_OPEN, kernel_clean)
+    bin_crop = cv2.morphologyEx(bin_crop, cv2.MORPH_CLOSE, kernel_clean)
 
+    return bin_crop, blurred
+
+
+def preprocessar_imagem(frame):
+    bin_img, _ = _preprocessar_recorte(frame, scale=0.5)
     return bin_img
 
 
 # ===========================================================================
-# RETIFICAÇÃO E CACHE SGBM + WLS
+# RETIFICAÇÃO COM CONVERGÊNCIA DIGITAL ("ENVESGAMENTO DIGITAL")
 # ===========================================================================
 
 def scale_intrinsics(cmtx, scale):
@@ -115,39 +124,6 @@ def scale_intrinsics(cmtx, scale):
     m[0, 2] *= scale
     m[1, 2] *= scale
     return m
-
-
-def _create_sgbm_wls(num_disp, block_size=SGBM_BLOCK_SIZE):
-    num_disp = max(16, int(np.ceil(num_disp / 16.0) * 16))
-    left_matcher = cv2.StereoSGBM_create(
-        minDisparity=0,
-        numDisparities=num_disp,
-        blockSize=block_size,
-        P1=8 * 1 * (block_size ** 2),
-        P2=32 * 1 * (block_size ** 2),
-        disp12MaxDiff=1,
-        preFilterCap=63,
-        uniquenessRatio=10,
-        speckleWindowSize=50,
-        speckleRange=2,
-        mode=cv2.STEREO_SGBM_MODE_SGBM_3WAY
-    )
-
-    right_matcher = None
-    wls_filter = None
-
-    if USE_WLS_FILTER and hasattr(cv2, "ximgproc"):
-        try:
-            right_matcher = cv2.ximgproc.createRightMatcher(left_matcher)
-            wls_filter = cv2.ximgproc.createDisparityWLSFilter(matcher_left=left_matcher)
-            wls_filter.setLambda(WLS_LAMBDA)
-            wls_filter.setSigmaColor(WLS_SIGMA_COLOR)
-        except Exception as e:
-            print(f"[AVISO] Falha ao iniciar WLS (cv2.ximgproc): {e}. Usando SGBM puro.")
-            right_matcher = None
-            wls_filter = None
-
-    return left_matcher, right_matcher, wls_filter, num_disp
 
 
 def build_rectification(
@@ -172,6 +148,25 @@ def build_rectification(
         alpha=0
     )
 
+    K1_base = P1[:, :3].astype(np.float64)
+    K2_base = P2[:, :3].astype(np.float64)
+
+    t_rect = np.linalg.solve(K2_base, P2[:, 3])
+    C2_rect = -t_rect
+
+    f_rect = float(P1[0, 0])
+    baseline = float(np.linalg.norm(C2_rect))
+    swap_left_right = bool(P2[0, 3] > 0)
+    disp_sign = -1.0 if P2[0, 3] > 0 else 1.0
+
+    delta_u = 0.0
+    if DIGITAL_CONVERGENCE_DIST_M is not None and DIGITAL_CONVERGENCE_DIST_M > 0.15:
+        raw_delta_u = (f_rect * float(C2_rect[0])) / (2.0 * float(DIGITAL_CONVERGENCE_DIST_M))
+        max_shift = 0.28 * float(img_size[0])
+        delta_u = float(np.clip(raw_delta_u, -max_shift, max_shift))
+        P1[0, 2] -= delta_u
+        P2[0, 2] += delta_u
+
     map1x, map1y = cv2.initUndistortRectifyMap(
         cmtx0,
         dist0,
@@ -192,18 +187,7 @@ def build_rectification(
 
     K1_rect = P1[:, :3].astype(np.float64)
     K2_rect = P2[:, :3].astype(np.float64)
-
-    t_rect = np.linalg.solve(K2_rect, P2[:, 3])
-    C2_rect = -t_rect
-
-    f_rect = float(P1[0, 0])
-    baseline = float(np.linalg.norm(C2_rect))
-    swap_left_right = bool(P2[0, 3] > 0)
-    disp_sign = -1.0 if P2[0, 3] > 0 else 1.0
-
-    left_matcher, right_matcher, wls_filter, num_disp = _create_sgbm_wls(
-        int(SGBM_NUM_DISP_BASE * scale)
-    )
+    cx_offset = float(K1_rect[0, 2] - K2_rect[0, 2])
 
     return {
         "map1x": map1x,
@@ -223,15 +207,14 @@ def build_rectification(
         "baseline": baseline,
         "swap_lr": swap_left_right,
         "disp_sign": disp_sign,
-        "sgbm": left_matcher,
-        "right_matcher": right_matcher,
-        "wls_filter": wls_filter,
-        "num_disp": num_disp,
+        "cx_offset": cx_offset,
+        "delta_u": delta_u,
+        "scale": scale,
     }
 
 
 # ===========================================================================
-# DETECÇÃO DE SEGMENTOS E FUSÃO ESTRITA DAS BORDAS DA CORDA
+# DETECÇÃO POR CRISTA CENTRAL + REJEIÇÃO DE DEGRAU DE SOMBRA
 # ===========================================================================
 
 def bearing_com_sinal(x1, y1, x2, y2):
@@ -285,23 +268,248 @@ def _construir_candidata_de_segmento(x1, y1, x2, y2, score_weight=None):
     }
 
 
-def _fundir_bordas_paralelas(raw_candidates, min_len):
-    if not raw_candidates:
-        return []
+def _validar_vale_bilateral(cand, gray_crop, dist_crop, x0_off, y0_off, max_rope_r):
+    """
+    Verifica se a reta candidata é realmente um VALE (escuro no meio e mais claro
+    nos DOIS lados perpendiculares) e não a borda de uma sombra (claro de um lado
+    e escuro do outro).
+    Retorna (valido_bool, fator_contraste).
+    """
+    x1, y1, x2, y2 = cand["segment_subpx"]
+    dx = x2 - x1
+    dy = y2 - y1
+    length = float(np.hypot(dx, dy))
+    if length < 6.0:
+        return False, 0.0
+
+    # Vetor normal unitário perpendicular à reta
+    nx = -dy / length
+    ny = dx / length
+
+    ch, cw = gray_crop.shape[:2]
+    alphas = np.linspace(0.12, 0.88, 12)
+
+    # Mede o raio médio da crista ao longo da reta
+    radii = []
+    for a in alphas:
+        px = int(round((x1 + a * dx) - x0_off))
+        py = int(round((y1 + a * dy) - y0_off))
+        if 0 <= py < ch and 0 <= px < cw:
+            d_val = float(dist_crop[py, px])
+            if d_val > 0.5:
+                radii.append(d_val)
+
+    est_r = float(np.median(radii)) if radii else 3.0
+    if est_r > max_rope_r:
+        return False, 0.0
+
+    # Distância perpendicular para amostrar o fundo de cada lado da corda
+    step_n = float(np.clip(est_r + 4.5, 4.0, max_rope_r + 6.0))
+
+    diffs_left = []
+    diffs_right = []
+
+    for a in alphas:
+        cx_p = (x1 + a * dx) - x0_off
+        cy_p = (y1 + a * dy) - y0_off
+
+        ix, iy = int(round(cx_p)), int(round(cy_p))
+        lx, ly = int(round(cx_p + step_n * nx)), int(round(cy_p + step_n * ny))
+        rx, ry = int(round(cx_p - step_n * nx)), int(round(cy_p - step_n * ny))
+
+        if (0 <= iy < ch and 0 <= ix < cw and
+                0 <= ly < ch and 0 <= lx < cw and
+                0 <= ry < ch and 0 <= rx < cw):
+            i_center = float(gray_crop[iy, ix])
+            i_left = float(gray_crop[ly, lx])
+            i_right = float(gray_crop[ry, rx])
+
+            diffs_left.append(i_left - i_center)
+            diffs_right.append(i_right - i_center)
+
+    if len(diffs_left) < 5:
+        return True, 1.0
+
+    med_left = float(np.median(diffs_left))
+    med_right = float(np.median(diffs_right))
+
+    # Borda de sombra tem med_left alto mas med_right <= 0 (ou vice-versa).
+    # Corda real tem AMBOS med_left e med_right positivos!
+    min_side_diff = min(med_left, med_right)
+    if min_side_diff < VALLEY_MIN_BILATERAL_DIFF:
+        return False, 0.0
+
+    # Fator de qualidade pelo contraste bilateral
+    contrast_boost = float(np.clip(1.0 + 0.02 * min_side_diff, 1.0, 1.6))
+    return True, contrast_boost
+
+
+def _refinar_eixo_ponderado_por_crista(clusters, dist_crop, gray_crop, x0_off, y0_off, min_len, max_rope_r):
+    refined = []
+    ch, cw = dist_crop.shape[:2]
+
+    for cl in clusters:
+        items = cl["items"]
+        total_w = cl["total_len"]
+
+        corridor = np.zeros((ch, cw), dtype=np.uint8)
+        pts_ext = []
+        for it in items:
+            x1, y1, x2, y2 = it["segment_subpx"]
+            lx1, ly1 = int(round(x1 - x0_off)), int(round(y1 - y0_off))
+            lx2, ly2 = int(round(x2 - x0_off)), int(round(y2 - y0_off))
+            cv2.line(corridor, (lx1, ly1), (lx2, ly2), 255, thickness=RIDGE_CORRIDOR_HALF_PX * 2)
+            pts_ext.append((x1, y1))
+            pts_ext.append((x2, y2))
+
+        valid_ridge_px = (corridor > 0) & (dist_crop >= MIN_ROPE_RADIUS_BASE) & (dist_crop <= max_rope_r)
+        ys_l, xs_l = np.nonzero(valid_ridge_px)
+
+        if len(xs_l) >= 15:
+            # Limita o valor máximo de d no peso para que manchas largas nunca ganhem vantagem
+            d_clamped = np.clip(dist_crop[ys_l, xs_l].astype(np.float64), 1.0, max_rope_r)
+            weights = d_clamped ** 2
+            w_sum = float(np.sum(weights))
+            xs_g = xs_l.astype(np.float64) + x0_off
+            ys_g = ys_l.astype(np.float64) + y0_off
+
+            mx = float(np.sum(xs_g * weights) / w_sum)
+            my = float(np.sum(ys_g * weights) / w_sum)
+
+            dx = xs_g - mx
+            dy = ys_g - my
+            cov_xx = float(np.sum(weights * dx * dx) / w_sum)
+            cov_yy = float(np.sum(weights * dy * dy) / w_sum)
+            cov_xy = float(np.sum(weights * dx * dy) / w_sum)
+
+            theta = 0.5 * np.arctan2(2.0 * cov_xy, cov_xx - cov_yy)
+            vx = float(np.cos(theta))
+            vy = float(np.sin(theta))
+
+            proj_t = dx * vx + dy * vy
+            t_min = float(np.percentile(proj_t, 1.0))
+            t_max = float(np.percentile(proj_t, 99.0))
+        else:
+            pts_arr = np.array(pts_ext, dtype=np.float64)
+            mx, my = np.mean(pts_arr[:, 0]), np.mean(pts_arr[:, 1])
+            ang_rad = np.radians(cl["bearing"])
+            vx, vy = float(np.sin(ang_rad)), float(np.cos(ang_rad))
+            proj_t = (pts_arr[:, 0] - mx) * vx + (pts_arr[:, 1] - my) * vy
+            t_min, t_max = float(np.min(proj_t)), float(np.max(proj_t))
+
+        fx1 = mx + t_min * vx
+        fy1 = my + t_min * vy
+        fx2 = mx + t_max * vx
+        fy2 = my + t_max * vy
+
+        cand = _construir_candidata_de_segmento(fx1, fy1, fx2, fy2, score_weight=total_w)
+        if cand is None or cand["length"] < min_len:
+            continue
+
+        # Validação anti-sombra: exige que seja um vale escuro cercado por fundo mais claro nos 2 lados
+        is_valley, contrast_boost = _validar_vale_bilateral(
+            cand, gray_crop, dist_crop, x0_off, y0_off, max_rope_r
+        )
+        if not is_valley:
+            continue
+
+        cand["weight"] *= contrast_boost
+        refined.append(cand)
+
+    refined.sort(key=lambda item: item["weight"], reverse=True)
+    return refined[:MAX_CANDIDATE_LINES]
+
+
+def detectar_candidatas(rect, cx, cy, roi_radius, max_gap=45, prev_bearing=None):
+    h, w = rect.shape[:2]
+    scale_est = float(w) / 1280.0
+
+    x0 = max(0, cx - roi_radius)
+    x1 = min(w, cx + roi_radius)
+    y0 = max(0, cy - roi_radius)
+    y1 = min(h, cy + roi_radius)
+
+    crop_bgr = rect[y0:y1, x0:x1]
+    bin_crop, clahe_crop = _preprocessar_recorte(crop_bgr, scale=scale_est)
+
+    circle_mask = np.zeros_like(bin_crop, dtype=np.uint8)
+    cv2.circle(circle_mask, (cx - x0, cy - y0), max(5, roi_radius - 2), 255, -1)
+    bin_crop = cv2.bitwise_and(bin_crop, bin_crop, mask=circle_mask)
+
+    dist_crop = cv2.distanceTransform(bin_crop, cv2.DIST_L2, 3)
+
+    # Teto máximo de espessura da corda ajustado pela escala:
+    # qualquer mancha cuja distância até a borda supere max_rope_r é sombra/objeto largo e é zerada!
+    max_rope_r = max(4.5, MAX_ROPE_RADIUS_BASE * max(scale_est, 0.45))
+    bin_crop[dist_crop > max_rope_r] = 0
+    dist_crop[dist_crop > max_rope_r] = 0.0
+
+    dilated = cv2.dilate(dist_crop, np.ones((3, 3), dtype=np.uint8))
+    ridge_crop = np.where(
+        (dist_crop >= dilated - 0.15)
+        & (dist_crop >= MIN_ROPE_RADIUS_BASE)
+        & (dist_crop <= max_rope_r)
+        & (circle_mask > 0),
+        255,
+        0
+    ).astype(np.uint8)
+
+    roi_bin_full = np.zeros((h, w), dtype=np.uint8)
+    roi_bin_full[y0:y1, x0:x1] = bin_crop
+
+    ridge_full = np.zeros((h, w), dtype=np.uint8)
+    ridge_full[y0:y1, x0:x1] = ridge_crop
+
+    roi_meta = {
+        "x0": x0,
+        "x1": x1,
+        "y0": y0,
+        "y1": y1,
+        "dist_crop": dist_crop,
+        "ridge_crop": ridge_crop,
+        "clahe_crop": clahe_crop,
+        "circle_mask": circle_mask,
+        "max_rope_r": max_rope_r,
+    }
+
+    min_len = max(10, int(roi_radius * MIN_LINE_LENGTH_FACTOR))
+
+    lines = cv2.HoughLinesP(
+        ridge_crop,
+        1,
+        np.pi / 180,
+        threshold=15,
+        minLineLength=min_len,
+        maxLineGap=max_gap
+    )
+
+    if lines is None:
+        detectar_candidatas.last_roi_meta = roi_meta
+        return [], roi_bin_full, ridge_full
+
+    raw_candidates = []
+    for item in lines:
+        lx1, ly1, lx2, ly2 = map(int, item[0])
+        cand = _construir_candidata_de_segmento(
+            lx1 + x0, ly1 + y0, lx2 + x0, ly2 + y0
+        )
+        if cand is not None and cand["length"] >= min_len:
+            raw_candidates.append(cand)
+
+    raw_candidates.sort(key=lambda item: item["length"], reverse=True)
 
     clusters = []
     for cand in raw_candidates:
         placed = False
-        x1, y1, x2, y2 = cand["segment_subpx"]
+        sx1, sy1, sx2, sy2 = cand["segment_subpx"]
         mx, my = cand["midpoint"]
-
         for cl in clusters:
             if _diff_angular_180(cand["bearing"], cl["bearing"]) <= CLUSTER_ANGLE_TOL_DEG:
                 a, b, c = cl["ref_line"]
                 d_mid = abs(a * mx + b * my + c)
-                d_p1 = abs(a * x1 + b * y1 + c)
-                d_p2 = abs(a * x2 + b * y2 + c)
-                if d_mid <= CLUSTER_RHO_TOL_PX and max(d_p1, d_p2) <= (CLUSTER_RHO_TOL_PX * 1.4):
+                d_p1 = abs(a * sx1 + b * sy1 + c)
+                d_p2 = abs(a * sx2 + b * sy2 + c)
+                if d_mid <= CLUSTER_RHO_TOL_PX and max(d_p1, d_p2) <= (CLUSTER_RHO_TOL_PX * 1.5):
                     cl["items"].append(cand)
                     w_old = cl["total_len"]
                     w_new = cand["length"]
@@ -317,84 +525,19 @@ def _fundir_bordas_paralelas(raw_candidates, min_len):
                 "items": [cand]
             })
 
-    merged_candidates = []
-
-    for cl in clusters:
-        items = cl["items"]
-        if len(items) == 1:
-            merged_candidates.append(items[0])
-            continue
-
-        total_w = cl["total_len"]
-        cx_m = sum(it["midpoint"][0] * it["length"] for it in items) / total_w
-        cy_m = sum(it["midpoint"][1] * it["length"] for it in items) / total_w
-
-        ang_rad = np.radians(cl["bearing"])
-        vx = float(np.sin(ang_rad))
-        vy = float(np.cos(ang_rad))
-
-        t_vals = []
-        for it in items:
-            ix1, iy1, ix2, iy2 = it["segment_subpx"]
-            t_vals.append((ix1 - cx_m) * vx + (iy1 - cy_m) * vy)
-            t_vals.append((ix2 - cx_m) * vx + (iy2 - cy_m) * vy)
-
-        t_min, t_max = float(min(t_vals)), float(max(t_vals))
-        fx1 = cx_m + t_min * vx
-        fy1 = cy_m + t_min * vy
-        fx2 = cx_m + t_max * vx
-        fy2 = cy_m + t_max * vy
-
-        merged = _construir_candidata_de_segmento(fx1, fy1, fx2, fy2, score_weight=total_w)
-        if merged is not None and merged["length"] >= min_len:
-            merged_candidates.append(merged)
-
-    merged_candidates.sort(key=lambda item: item["weight"], reverse=True)
-    return merged_candidates[:MAX_CANDIDATE_LINES]
-
-
-def detectar_candidatas(rect, cx, cy, roi_radius, max_gap=50, prev_bearing=None):
-    bin_img = preprocessar_imagem(rect)
-
-    mask = np.zeros_like(bin_img)
-    cv2.circle(mask, (cx, cy), roi_radius, 255, -1)
-
-    roi_bin = cv2.bitwise_and(bin_img, bin_img, mask=mask)
-    edges = cv2.Canny(roi_bin, 50, 150)
-
-    min_len = max(10, int(roi_radius * MIN_LINE_LENGTH_FACTOR))
-
-    lines = cv2.HoughLinesP(
-        edges,
-        1,
-        np.pi / 180,
-        threshold=25,
-        minLineLength=min_len,
-        maxLineGap=max_gap
+    candidates = _refinar_eixo_ponderado_por_crista(
+        clusters, dist_crop, clahe_crop, x0, y0, min_len, max_rope_r
     )
-
-    if lines is None:
-        return [], roi_bin, edges
-
-    raw_candidates = []
-    for item in lines:
-        x1, y1, x2, y2 = map(int, item[0])
-        cand = _construir_candidata_de_segmento(x1, y1, x2, y2)
-        if cand is not None and cand["length"] >= min_len:
-            raw_candidates.append(cand)
-
-    raw_candidates.sort(key=lambda item: item["length"], reverse=True)
-
-    candidates = _fundir_bordas_paralelas(raw_candidates, min_len)
 
     if prev_bearing is not None and candidates:
         for c in candidates:
             ang_diff = _diff_angular_180(c["bearing"], prev_bearing)
-            continuity_factor = 1.30 if ang_diff < 10.0 else (1.0 if ang_diff < 22.0 else 0.80)
+            continuity_factor = 1.35 if ang_diff < 10.0 else (1.0 if ang_diff < 22.0 else 0.75)
             c["weight"] *= continuity_factor
         candidates.sort(key=lambda item: item["weight"], reverse=True)
 
-    return candidates, roi_bin, edges
+    detectar_candidatas.last_roi_meta = roi_meta
+    return candidates, roi_bin_full, ridge_full
 
 
 def detectar_linha_mono(rect_l, cx, cy, roi_radius):
@@ -404,7 +547,7 @@ def detectar_linha_mono(rect_l, cx, cy, roi_radius):
         cx,
         cy,
         roi_radius,
-        max_gap=20,
+        max_gap=35,
         prev_bearing=_prev_bearing_l
     )
 
@@ -423,362 +566,199 @@ def detectar_linha_mono(rect_l, cx, cy, roi_radius):
 
 
 # ===========================================================================
-# DETECÇÃO AUTOMÁTICA DO SENTIDO DE DISPARIDADE NA MESMA SCANLINE Y
+# ESTIMAÇÃO DE PROFUNDIDADE 1D SUBPIXEL (COMPENSADA COM CONVERGÊNCIA DIGITAL)
 # ===========================================================================
 
-def _detectar_swap_na_mesma_linha_y(left_cand, right_cand, default_swap):
-    """
-    Avalia x_L(y_ref) e x_R(y_ref) exatamente na mesma altura vertical y_ref.
-    Não sofre com recortes diferentes do círculo da ROI.
-    """
-    lx1, ly1, lx2, ly2 = left_cand["segment_subpx"]
-    rx1, ry1, rx2, ry2 = right_cand["segment_subpx"]
+def _centroide_subpixel_crista_1d(meta, y_global, x_est_global, half_win=SCANLINE_HALF_WIN_PX):
+    dist_crop = meta["dist_crop"]
+    x0, y0 = meta["x0"], meta["y0"]
+    ch, cw = dist_crop.shape[:2]
 
-    if abs(ly2 - ly1) < 12.0 or abs(ry2 - ry1) < 12.0:
-        return default_swap
-
-    y_min = max(min(ly1, ly2), min(ry1, ry2))
-    y_max = min(max(ly1, ly2), max(ry1, ry2))
-    if y_max <= y_min:
-        return default_swap
-
-    y_ref = 0.5 * (y_min + y_max)
-    u_l = lx1 + (y_ref - ly1) * (lx2 - lx1) / (ly2 - ly1)
-    u_r = rx1 + (y_ref - ry1) * (rx2 - rx1) / (ry2 - ry1)
-
-    if abs(u_l - u_r) > 2.5:
-        return bool(u_l < u_r)
-
-    return default_swap
-
-
-# ===========================================================================
-# MÉTODO 1: SGBM + WLS SEMPRE ALINHADO NO REFERENCIAL DA CAM1 (rect_l)
-# ===========================================================================
-
-def computar_mapa_sgbm_roi(rect_l, rect_r, cx, cy, roi_radius, geometry, force_swap=None):
-    left_matcher = geometry["sgbm"]
-    right_matcher = geometry.get("right_matcher")
-    wls_filter = geometry.get("wls_filter")
-    num_disp = geometry["num_disp"]
-    use_swap = geometry["swap_lr"] if force_swap is None else bool(force_swap)
-
-    gray_l = cv2.cvtColor(rect_l, cv2.COLOR_BGR2GRAY) if rect_l.ndim == 3 else rect_l
-    gray_r = cv2.cvtColor(rect_r, cv2.COLOR_BGR2GRAY) if rect_r.ndim == 3 else rect_r
-
-    h, w = gray_l.shape[:2]
-
-    x_roi_0 = max(0, cx - roi_radius)
-    x_roi_1 = min(w, cx + roi_radius)
-    y_start = max(0, cy - roi_radius)
-    y_end = min(h, cy + roi_radius)
-
-    if not use_swap:
-        x_start = max(0, x_roi_0 - num_disp)
-        x_end = x_roi_1
-    else:
-        x_start = x_roi_0
-        x_end = min(w, x_roi_1 + num_disp)
-
-    if (x_end - x_start) <= num_disp or (y_end - y_start) < 6:
+    yl = int(round(y_global - y0))
+    if yl < 0 or yl >= ch:
         return None
 
-    roi_l = clahe.apply(gray_l[y_start:y_end, x_start:x_end])
-    roi_r = clahe.apply(gray_r[y_start:y_end, x_start:x_end])
-    guide_l = rect_l[y_start:y_end, x_start:x_end]
+    xl_c = int(round(x_est_global - x0))
+    xa = max(0, xl_c - half_win)
+    xb = min(cw, xl_c + half_win + 1)
+    if xb <= xa + 1:
+        return None
 
-    if not use_swap:
-        img_left = roi_l
-        img_right = roi_r
-        guide_img = guide_l
-    else:
-        img_left = cv2.flip(roi_l, 1)
-        img_right = cv2.flip(roi_r, 1)
-        guide_img = cv2.flip(guide_l, 1)
+    profile = dist_crop[yl, xa:xb].astype(np.float64)
+    max_val = float(np.max(profile))
+    if max_val < 0.8:
+        return None
 
-    disp_left_i16 = left_matcher.compute(img_left, img_right)
+    weights = np.where(profile >= 0.4 * max_val, profile * profile, 0.0)
+    w_sum = float(np.sum(weights))
+    if w_sum <= 1e-6:
+        return None
 
-    used_wls = False
-    if wls_filter is not None and right_matcher is not None:
-        disp_right_i16 = right_matcher.compute(img_right, img_left)
-        disp_wls_i16 = wls_filter.filter(
-            disp_left_i16,
-            guide_img,
-            None,
-            disp_right_i16
-        )
-        disp_full = disp_wls_i16.astype(np.float32) / 16.0
-        used_wls = True
-    else:
-        disp_full = disp_left_i16.astype(np.float32) / 16.0
-
-    if use_swap:
-        disp_full = cv2.flip(disp_full, 1)
-
-    local_x0 = x_roi_0 - x_start
-    local_x1 = local_x0 + (x_roi_1 - x_roi_0)
-    disp_crop = disp_full[:, local_x0:local_x1]
-
-    circle_mask = np.zeros(disp_crop.shape, dtype=np.uint8)
-    cv2.circle(
-        circle_mask,
-        (cx - x_roi_0, cy - y_start),
-        roi_radius,
-        255,
-        -1
-    )
-
-    return {
-        "disp_crop": disp_crop,
-        "used_wls": used_wls,
-        "circle_mask": circle_mask,
-        "x_roi_0": x_roi_0,
-        "x_roi_1": x_roi_1,
-        "y_start": y_start,
-        "y_end": y_end,
-        "num_disp": num_disp,
-        "gray_l": gray_l,
-        "gray_r": gray_r,
-    }
+    xs_local = np.arange(xa, xb, dtype=np.float64)
+    u_subpx_local = float(np.sum(xs_local * weights) / w_sum)
+    return float(x0 + u_subpx_local)
 
 
-def extrair_profundidade_linha_sgbm(sgbm_data, left_cand, geometry):
-    if sgbm_data is None or left_cand is None:
-        return None, None, None
-
+def estimar_profundidade_scanline_1d(left_cand, right_cand, meta_l, meta_r, geometry):
     f_rect = geometry["f_rect"]
     baseline = geometry["baseline"]
     K1 = geometry["K1"]
+    cx_offset = geometry.get("cx_offset", 0.0)
 
-    if baseline <= 1e-5 or f_rect <= 1.0:
-        return None, None, None
+    if baseline <= 1e-5 or f_rect <= 1.0 or meta_l is None or meta_r is None:
+        return None, None, None, []
 
-    disp_crop = sgbm_data["disp_crop"]
-    circle_mask = sgbm_data["circle_mask"]
-    x_roi_0 = sgbm_data["x_roi_0"]
-    y_start = sgbm_data["y_start"]
+    lx1, ly1, lx2, ly2 = left_cand["segment_subpx"]
+    rx1, ry1, rx2, ry2 = right_cand["segment_subpx"]
 
-    x1, y1, x2, y2 = left_cand["segment"]
+    y_min = max(min(ly1, ly2), min(ry1, ry2))
+    y_max = min(max(ly1, ly2), max(ry1, ry2))
 
-    neighborhood_mask = np.zeros_like(circle_mask, dtype=np.uint8)
-    cv2.line(
-        neighborhood_mask,
-        (x1 - x_roi_0, y1 - y_start),
-        (x2 - x_roi_0, y2 - y_start),
-        255,
-        thickness=SGBM_NEIGHBORHOOD_THICKNESS
-    )
+    if (y_max - y_min) < 4.0 or abs(ly2 - ly1) < 4.0 or abs(ry2 - ry1) < 4.0:
+        return None, None, None, []
 
     d_min_fg = max(1.0, (f_rect * baseline) / MAX_DISTANCE)
     d_max_fg = (f_rect * baseline) / MIN_DISTANCE
 
-    valid = (
-        (neighborhood_mask > 0)
-        & (circle_mask > 0)
-        & (disp_crop >= d_min_fg)
-        & (disp_crop <= d_max_fg)
-    )
+    ys = np.linspace(y_min, y_max, DISTANCE_SAMPLES)
+    scan_samples = []
 
-    if np.count_nonzero(valid) < 6:
-        return None, None, neighborhood_mask
+    use_1d_centroid = abs(left_cand["bearing"]) <= 72.0
 
-    vals = disp_crop[valid]
-    p_low = float(np.percentile(vals, TOP_DISP_PERCENTILE_MIN))
-    p_high = float(np.percentile(vals, TOP_DISP_PERCENTILE_MAX))
+    for y_val in ys:
+        ul_line = lx1 + (y_val - ly1) * (lx2 - lx1) / (ly2 - ly1)
+        ur_line = rx1 + (y_val - ry1) * (rx2 - rx1) / (ry2 - ry1)
 
-    top_pixels_mask = valid & (disp_crop >= p_low) & (disp_crop <= p_high)
-    if np.count_nonzero(top_pixels_mask) == 0:
-        top_pixels_mask = valid & (disp_crop >= p_low)
-
-    top_vals = disp_crop[top_pixels_mask]
-    mean_top_disp = float(np.mean(top_vals))
-    z_depth = (f_rect * baseline) / mean_top_disp
-
-    mx, my = left_cand["midpoint"]
-    cx_cam, cy_cam = K1[0, 2], K1[1, 2]
-    X = (mx - cx_cam) * z_depth / f_rect
-    Y = (my - cy_cam) * z_depth / f_rect
-    dist_3d = float(np.sqrt(X * X + Y * Y + z_depth * z_depth))
-
-    if not (MIN_DISTANCE <= dist_3d <= MAX_DISTANCE):
-        return None, mean_top_disp, top_pixels_mask
-
-    return dist_3d, mean_top_disp, top_pixels_mask
-
-
-# ===========================================================================
-# MÉTODO 2: CORRELAÇÃO EPIPOLAR DIRETA NA FAIXA DA LINHA (FUNCIONA EM QUALQUER ÂNGULO)
-# ===========================================================================
-
-def calcular_profundidade_correlacao_epipolar(sgbm_data, left_cand, geometry, roi_bin_l=None, roi_bin_r=None):
-    """
-    Faz template matching 2D ao longo da linha epipolar ao redor de pontos da reta.
-    Garante estimativa de profundidade mesmo quando a linha está horizontal ou
-    quando o WLS tem poucos pixels válidos.
-    """
-    if sgbm_data is None or left_cand is None:
-        return None
-
-    f_rect = geometry["f_rect"]
-    baseline = geometry["baseline"]
-    K1 = geometry["K1"]
-    num_disp = sgbm_data["num_disp"]
-
-    if baseline <= 1e-5 or f_rect <= 1.0:
-        return None
-
-    gray_l = sgbm_data["gray_l"]
-    gray_r = sgbm_data["gray_r"]
-    h, w = gray_l.shape[:2]
-
-    lx1, ly1, lx2, ly2 = left_cand["segment_subpx"]
-    patch_half_y = 9
-    patch_half_x = 12
-
-    d_min_fg = max(1.5, (f_rect * baseline) / MAX_DISTANCE)
-    d_max_fg = min(float(num_disp * 1.5), (f_rect * baseline) / MIN_DISTANCE)
-
-    disparities = []
-    # Amostra 5 pontos ao longo do segmento detectado na Cam1
-    for alpha in (0.2, 0.35, 0.5, 0.65, 0.8):
-        px = int(round(lx1 + alpha * (lx2 - lx1)))
-        py = int(round(ly1 + alpha * (ly2 - ly1)))
-
-        y0, y1 = py - patch_half_y, py + patch_half_y + 1
-        x0, x1 = px - patch_half_x, px + patch_half_x + 1
-        if y0 < 2 or y1 >= h - 2 or x0 < 2 or x1 >= w - 2:
-            continue
-
-        # Combina intensidade CLAHE + máscara binária para ter borda forte em qualquer direção
-        if roi_bin_l is not None and roi_bin_r is not None:
-            tpl = cv2.addWeighted(gray_l[y0:y1, x0:x1], 0.6, roi_bin_l[y0:y1, x0:x1], 0.4, 0)
-            sx0 = max(0, x0 - int(d_max_fg) - 4)
-            sx1 = min(w, x1 + int(d_max_fg) + 4)
-            strip = cv2.addWeighted(gray_r[y0 - 2:y1 + 2, sx0:sx1], 0.6, roi_bin_r[y0 - 2:y1 + 2, sx0:sx1], 0.4, 0)
+        if use_1d_centroid:
+            ul_sub = _centroide_subpixel_crista_1d(meta_l, y_val, ul_line)
+            ur_sub = _centroide_subpixel_crista_1d(meta_r, y_val, ur_line)
+            if ul_sub is None:
+                ul_sub = ul_line
+            if ur_sub is None:
+                ur_sub = ur_line
         else:
-            tpl = gray_l[y0:y1, x0:x1]
-            sx0 = max(0, x0 - int(d_max_fg) - 4)
-            sx1 = min(w, x1 + int(d_max_fg) + 4)
-            strip = gray_r[y0 - 2:y1 + 2, sx0:sx1]
+            ul_sub = ul_line
+            ur_sub = ur_line
 
-        if strip.shape[1] <= tpl.shape[1] or strip.shape[0] < tpl.shape[0]:
-            continue
-
-        res = cv2.matchTemplate(strip, tpl, cv2.TM_CCOEFF_NORMED)
-        _, max_val, _, max_loc = cv2.minMaxLoc(res)
-        if max_val < 0.45:
-            continue
-
-        best_x_in_r = sx0 + max_loc[0] + patch_half_x
-        disp_val = abs(float(px - best_x_in_r))
+        disp_val = abs((ul_sub - ur_sub) - cx_offset)
         if d_min_fg <= disp_val <= d_max_fg:
-            disparities.append(disp_val)
+            scan_samples.append((float(y_val), float(ul_sub), float(ur_sub), float(disp_val)))
 
-    if not disparities:
-        return None
+    if len(scan_samples) < 4:
+        return None, None, None, scan_samples
 
-    med_disp = float(np.median(disparities))
-    z_depth = (f_rect * baseline) / med_disp
+    disps = np.array([s[3] for s in scan_samples], dtype=np.float64)
+
+    q35, q85 = np.percentile(disps, [35.0, 85.0])
+    inliers = disps[(disps >= q35 - 0.5) & (disps <= q85 + 0.5)]
+    if len(inliers) == 0:
+        inliers = disps
+
+    best_disp = float(np.mean(inliers))
+    std_disp = float(np.std(inliers))
+    z_depth = (f_rect * baseline) / best_disp
+
     mx, my = left_cand["midpoint"]
     X = (mx - K1[0, 2]) * z_depth / f_rect
     Y = (my - K1[1, 2]) * z_depth / f_rect
     dist_3d = float(np.sqrt(X * X + Y * Y + z_depth * z_depth))
 
     if not (MIN_DISTANCE <= dist_3d <= MAX_DISTANCE):
-        return None
-    return dist_3d
+        return None, best_disp, std_disp, scan_samples
+
+    return dist_3d, best_disp, std_disp, scan_samples
 
 
-# ===========================================================================
-# MÉTODO 3: DISPARIDADE SUBPIXEL POR SCANLINE (COM SUPORTE A QUALQUER INCLINAÇÃO)
-# ===========================================================================
+def estimar_profundidade_correlacao_subpixel(left_cand, meta_l, meta_r, geometry):
+    if meta_l is None or meta_r is None or left_cand is None:
+        return None, None
 
-def _refinar_centroide_scanline(roi_bin, y_idx, u_est, half_win=10):
-    if roi_bin is None:
-        return u_est
-    h, w = roi_bin.shape[:2]
-    yi = int(round(y_idx))
-    if yi < 0 or yi >= h:
-        return u_est
-
-    x0 = max(0, int(round(u_est)) - half_win)
-    x1 = min(w, int(round(u_est)) + half_win + 1)
-    if x1 <= x0:
-        return u_est
-
-    row_slice = roi_bin[yi, x0:x1]
-    xs_local = np.nonzero(row_slice > 0)[0]
-    if len(xs_local) == 0:
-        return u_est
-
-    return float(x0 + np.mean(xs_local))
-
-
-def reconstruir_por_scanline(left_cand, right_cand, geometry, roi_bin_l=None, roi_bin_r=None):
     f_rect = geometry["f_rect"]
     baseline = geometry["baseline"]
     K1 = geometry["K1"]
+    cx_offset = geometry.get("cx_offset", 0.0)
 
     if baseline <= 1e-5 or f_rect <= 1.0:
-        return None
+        return None, None
 
-    lx1, ly1, lx2, ly2 = left_cand.get("segment_subpx", left_cand["segment"])
-    rx1, ry1, rx2, ry2 = right_cand.get("segment_subpx", right_cand["segment"])
+    dist_l = np.clip(meta_l["dist_crop"] * 25.0, 0, 255).astype(np.uint8)
+    dist_r = np.clip(meta_r["dist_crop"] * 25.0, 0, 255).astype(np.uint8)
+    feat_l = cv2.addWeighted(meta_l["clahe_crop"], 0.45, dist_l, 0.55, 0)
+    feat_r = cv2.addWeighted(meta_r["clahe_crop"], 0.45, dist_r, 0.55, 0)
 
-    y_min = max(min(ly1, ly2), min(ry1, ry2))
-    y_max = min(max(ly1, ly2), max(ry1, ry2))
+    ch, cw = feat_l.shape[:2]
+    x0_l, y0_l = meta_l["x0"], meta_l["y0"]
+    x0_r, y0_r = meta_r["x0"], meta_r["y0"]
 
-    # Permite scanline mesmo em linhas bastante inclinadas (até 3px de variação vertical)
-    if (y_max - y_min) < 3 or abs(ly2 - ly1) < 3 or abs(ry2 - ry1) < 3:
-        return None
+    lx1, ly1, lx2, ly2 = left_cand["segment_subpx"]
+    ph_y, ph_x = 8, 10
 
-    ys = np.linspace(y_min, y_max, DISTANCE_SAMPLES)
-    u_l_raw = lx1 + (ys - ly1) * (lx2 - lx1) / float(ly2 - ly1)
-    u_r_raw = rx1 + (ys - ry1) * (rx2 - rx1) / float(ry2 - ry1)
-
-    if abs(left_cand["bearing"]) < 70.0:
-        u_l = np.array([
-            _refinar_centroide_scanline(roi_bin_l, y, u) for y, u in zip(ys, u_l_raw)
-        ], dtype=np.float64)
-        u_r = np.array([
-            _refinar_centroide_scanline(roi_bin_r, y, u) for y, u in zip(ys, u_r_raw)
-        ], dtype=np.float64)
-    else:
-        u_l = u_l_raw
-        u_r = u_r_raw
-
-    disp = np.abs(u_l - u_r)
     d_min_fg = max(1.0, (f_rect * baseline) / MAX_DISTANCE)
-    valid = disp >= d_min_fg
-    if np.count_nonzero(valid) < 4:
-        return None
+    d_max_fg = (f_rect * baseline) / MIN_DISTANCE
 
-    ys = ys[valid]
-    u_l = u_l[valid]
-    disp = disp[valid]
+    subpx_disps = []
 
-    p_cut = float(np.percentile(disp, 50.0))
-    top_mask = disp >= p_cut
-    ys = ys[top_mask]
-    u_l = u_l[top_mask]
-    disp = disp[top_mask]
+    for alpha in (0.15, 0.30, 0.45, 0.55, 0.70, 0.85):
+        gx = lx1 + alpha * (lx2 - lx1)
+        gy = ly1 + alpha * (ly2 - ly1)
 
-    zs = (f_rect * baseline) / disp
-    xs = (u_l - K1[0, 2]) * zs / f_rect
-    ys_3d = (ys - K1[1, 2]) * zs / f_rect
+        lx = int(round(gx - x0_l))
+        ly = int(round(gy - y0_l))
+        ry = int(round(gy - y0_r))
 
-    pts = np.column_stack((xs, ys_3d, zs))
-    dists = np.linalg.norm(pts, axis=1)
-    mean_dist = float(np.mean(dists))
+        if (ly - ph_y < 1) or (ly + ph_y + 1 >= ch - 1) or (lx - ph_x < 1) or (lx + ph_x + 1 >= cw - 1):
+            continue
+        if (ry - ph_y - 1 < 0) or (ry + ph_y + 2 >= feat_r.shape[0]):
+            continue
 
-    if not (MIN_DISTANCE <= mean_dist <= MAX_DISTANCE):
-        return None
+        tpl = feat_l[ly - ph_y:ly + ph_y + 1, lx - ph_x:lx + ph_x + 1]
+        strip = feat_r[ry - ph_y - 1:ry + ph_y + 2, :]
 
-    return mean_dist, pts
+        if strip.shape[1] <= tpl.shape[1] + 2:
+            continue
+
+        res = cv2.matchTemplate(strip, tpl, cv2.TM_CCOEFF_NORMED)
+        _, max_val, _, max_loc = cv2.minMaxLoc(res)
+        if max_val < 0.42:
+            continue
+
+        pk_x = max_loc[0]
+        pk_y = max_loc[1]
+
+        delta_sub = 0.0
+        if 0 < pk_x < (res.shape[1] - 1):
+            c_left = float(res[pk_y, pk_x - 1])
+            c_mid = float(res[pk_y, pk_x])
+            c_right = float(res[pk_y, pk_x + 1])
+            denom = 2.0 * (c_left - 2.0 * c_mid + c_right)
+            if abs(denom) > 1e-6:
+                delta_sub = float(np.clip((c_left - c_right) / denom, -0.5, 0.5))
+
+        matched_x_global = x0_r + pk_x + delta_sub + ph_x
+        disp_val = abs(float((gx - matched_x_global) - cx_offset))
+
+        if d_min_fg <= disp_val <= d_max_fg:
+            subpx_disps.append(disp_val)
+
+    if not subpx_disps:
+        return None, None
+
+    med_disp = float(np.median(subpx_disps))
+    z_depth = (f_rect * baseline) / med_disp
+
+    mx, my = left_cand["midpoint"]
+    X = (mx - K1[0, 2]) * z_depth / f_rect
+    Y = (my - K1[1, 2]) * z_depth / f_rect
+    dist_3d = float(np.sqrt(X * X + Y * Y + z_depth * z_depth))
+
+    if not (MIN_DISTANCE <= dist_3d <= MAX_DISTANCE):
+        return None, med_disp
+
+    return dist_3d, med_disp
 
 
 # ===========================================================================
-# MÉTODO 4: INTERSEÇÃO DE PLANOS 3D
+# INTERSEÇÃO DE PLANOS 3D (AUXILIAR / TELEMETRIA DO PLANO)
 # ===========================================================================
 
 def plano_retroprojecao(line_2d, K, camera_center):
@@ -944,65 +924,44 @@ def reconstruir_par(left, right, geometry):
 
 
 # ===========================================================================
-# PAINEL VISUAL SGBM + WLS NA ROI
+# PAINEL DA 3ª LINHA DO GRID: MAPA DA CRISTA + GRÁFICO SUBPIXEL 1D
 # ===========================================================================
 
-def gerar_painel_sgbm_roi(
+def gerar_painel_subpixel_roi(
     rect_l,
-    sgbm_data,
+    meta_l,
     cx,
     cy,
     roi_radius,
     left_cand=None,
-    sgbm_dist=None,
-    median_disp=None,
+    scan_dist=None,
+    corr_dist=None,
+    best_disp=None,
+    std_disp=None,
     final_dist=None,
-    sampled_mask=None
+    scan_samples=None,
+    delta_u=0.0
 ):
     h, w = rect_l.shape[:2]
     panel_w = w * 2
     panel = np.full((h, panel_w, 3), 18, dtype=np.uint8)
 
-    if sgbm_data is None:
-        cv2.putText(
-            panel,
-            "SGBM + WLS na ROI indisponivel",
-            (20, h // 2),
-            cv2.FONT_HERSHEY_SIMPLEX,
-            0.7,
-            (0, 0, 255),
-            2
-        )
+    if meta_l is None:
         return panel
 
-    disp_crop = sgbm_data["disp_crop"]
-    circle_mask = sgbm_data["circle_mask"]
-    used_wls = sgbm_data.get("used_wls", False)
-    x_roi_0 = sgbm_data["x_roi_0"]
-    x_roi_1 = sgbm_data["x_roi_1"]
-    y_start = sgbm_data["y_start"]
-    y_end = sgbm_data["y_end"]
-    num_disp = max(16, sgbm_data["num_disp"])
+    dist_crop = meta_l["dist_crop"]
+    circle_mask = meta_l["circle_mask"]
+    x0, x1 = meta_l["x0"], meta_l["x1"]
+    y0, y1 = meta_l["y0"], meta_l["y1"]
 
-    valid_circle = (circle_mask > 0) & (disp_crop > 0.5)
-    if np.count_nonzero(valid_circle) > 20:
-        d_min = float(np.percentile(disp_crop[valid_circle], 5))
-        d_max = float(np.percentile(disp_crop[valid_circle], 98))
-        if (d_max - d_min) < 2.0:
-            d_min, d_max = 0.0, float(num_disp)
-    else:
-        d_min, d_max = 0.0, float(num_disp)
-
-    disp_norm = np.clip((disp_crop - d_min) / max(d_max - d_min, 1e-3), 0.0, 1.0)
-    disp_u8 = np.uint8(disp_norm * 255.0)
+    max_d = max(float(np.max(dist_crop)), 2.0)
+    dist_u8 = np.uint8(np.clip((dist_crop / max_d) * 255.0, 0, 255))
     colormap = getattr(cv2, "COLORMAP_TURBO", cv2.COLORMAP_JET)
-    color_crop = cv2.applyColorMap(disp_u8, colormap)
-
-    invalid_mask = (disp_crop <= 0.5) | (circle_mask == 0)
-    color_crop[invalid_mask] = (25, 25, 25)
+    color_crop = cv2.applyColorMap(dist_u8, colormap)
+    color_crop[(dist_crop < 0.5) | (circle_mask == 0)] = (22, 22, 22)
 
     context_view = (rect_l * 0.35).astype(np.uint8)
-    roi_slice = context_view[y_start:y_end, x_roi_0:x_roi_1]
+    roi_slice = context_view[y0:y1, x0:x1]
     mask_bool = circle_mask > 0
     roi_slice[mask_bool] = color_crop[mask_bool]
 
@@ -1011,72 +970,69 @@ def gerar_painel_sgbm_roi(
         lx1, ly1, lx2, ly2 = left_cand["segment"]
         cv2.line(context_view, (lx1, ly1), (lx2, ly2), (0, 255, 0), 2)
 
-    x_ctx = max(10, (panel_w // 2) - w - 10)
-    panel[0:h, x_ctx:x_ctx + w] = context_view
+    if scan_samples:
+        for y_s, ul_s, _, _ in scan_samples:
+            cv2.circle(context_view, (int(round(ul_s)), int(round(y_s))), 2, (255, 255, 255), -1)
 
-    zoom_size = min(h - 24, (x_roi_1 - x_roi_0) * 2, w - 40)
-    zoom_size = max(40, zoom_size)
-    zoom_crop = color_crop.copy()
+    panel[0:h, 0:w] = context_view
 
-    if sampled_mask is not None and sampled_mask.shape == zoom_crop.shape[:2]:
-        sampled_u8 = (sampled_mask.astype(np.uint8)) * 255
-        contours, _ = cv2.findContours(sampled_u8, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(zoom_crop, contours, -1, (255, 255, 0), 1)
+    plot_w = min(260, max(140, w // 2))
+    plot_h = max(80, h - 40)
+    px0 = w + 15
+    py0 = 20
+    cv2.rectangle(panel, (px0, py0), (px0 + plot_w, py0 + plot_h), (32, 32, 32), -1)
+    cv2.rectangle(panel, (px0, py0), (px0 + plot_w, py0 + plot_h), (90, 90, 90), 1)
 
-    if left_cand is not None:
-        lx1, ly1, lx2, ly2 = left_cand["segment"]
-        corridor = np.zeros(zoom_crop.shape[:2], dtype=np.uint8)
-        cv2.line(
-            corridor,
-            (lx1 - x_roi_0, ly1 - y_start),
-            (lx2 - x_roi_0, ly2 - y_start),
-            255,
-            SGBM_NEIGHBORHOOD_THICKNESS
-        )
-        c_contours, _ = cv2.findContours(corridor, cv2.RETR_EXTERNAL, cv2.CHAIN_APPROX_SIMPLE)
-        cv2.drawContours(zoom_crop, c_contours, -1, (220, 220, 220), 1)
+    if scan_samples and best_disp is not None:
+        d_min_plot = max(0.0, best_disp - 12.0)
+        d_max_plot = best_disp + 12.0
+        x_ref = int(px0 + 0.5 * plot_w)
+        cv2.line(panel, (x_ref, py0), (x_ref, py0 + plot_h), (0, 255, 0), 1)
 
-        cv2.line(
-            zoom_crop,
-            (lx1 - x_roi_0, ly1 - y_start),
-            (lx2 - x_roi_0, ly2 - y_start),
-            (0, 255, 0),
-            2
-        )
-
-    cv2.circle(
-        zoom_crop,
-        (cx - x_roi_0, cy - y_start),
-        roi_radius,
-        (0, 255, 255),
-        2
-    )
-
-    zoom_vis = cv2.resize(zoom_crop, (zoom_size, zoom_size), interpolation=cv2.INTER_LINEAR)
-    y_z0 = (h - zoom_size) // 2
-    x_z0 = (panel_w // 2) + 20
-    if x_z0 + zoom_size < panel_w:
-        panel[y_z0:y_z0 + zoom_size, x_z0:x_z0 + zoom_size] = zoom_vis
-
-    tag_wls = "SGBM + WLS (ALINHADO CAM1)" if used_wls else "SGBM (ALINHADO CAM1)"
-    x_txt = x_z0 + zoom_size + 20
-    if x_txt < panel_w - 80:
-        f_scale = max(0.45, h / 650.0)
-        disp_str = f"Media Top Disp: {median_disp:.1f} px" if median_disp is not None else "Media Top Disp: --"
-        z_sgbm_str = f"Z (Vizinhanca): {sgbm_dist:.2f} m" if sgbm_dist is not None else "Z (Vizinhanca): sem leitura"
-        z_fin_str = f"D Filtrada: {final_dist:.2f} m" if (final_dist is not None and final_dist > 0) else "D Filtrada: --"
-
-        cv2.putText(panel, tag_wls, (x_txt, y_z0 + 25), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 255), 2)
-        cv2.putText(panel, disp_str, (x_txt, y_z0 + 60), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (255, 255, 255), 1)
-        cv2.putText(panel, z_sgbm_str, (x_txt, y_z0 + 95), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 0), 2)
-        cv2.putText(panel, z_fin_str, (x_txt, y_z0 + 130), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (255, 200, 50), 2)
+        prev_pt = None
+        for y_s, _, _, d_s in scan_samples:
+            rel_y = (y_s - y0) / max(float(y1 - y0), 1.0)
+            rel_x = (d_s - d_min_plot) / max(d_max_plot - d_min_plot, 1e-3)
+            gx = int(np.clip(px0 + rel_x * plot_w, px0 + 2, px0 + plot_w - 2))
+            gy = int(np.clip(py0 + rel_y * plot_h, py0 + 2, py0 + plot_h - 2))
+            cv2.circle(panel, (gx, gy), 3, (0, 220, 255), -1)
+            if prev_pt is not None:
+                cv2.line(panel, prev_pt, (gx, gy), (0, 160, 255), 1)
+            prev_pt = (gx, gy)
 
     cv2.putText(
         panel,
-        tag_wls,
+        "Perfil Disp(y)",
+        (px0 + 8, py0 + 18),
+        cv2.FONT_HERSHEY_SIMPLEX,
+        0.45,
+        (0, 255, 255),
+        1
+    )
+
+    x_txt = px0 + plot_w + 20
+    if x_txt < panel_w - 60:
+        f_scale = max(0.45, h / 640.0)
+        std_txt = f" (std {std_disp:.2f}px)" if std_disp is not None else ""
+        disp_str = f"Disp. Real: {best_disp:.2f} px{std_txt}" if best_disp is not None else "Disp. Real: --"
+        conv_str = f"Toe-In Digital: {DIGITAL_CONVERGENCE_DIST_M:.2f}m ({delta_u:+.1f}px/cam)"
+        z_scan_str = f"Z (1D Crista): {scan_dist:.2f} m" if scan_dist is not None else "Z (1D Crista): --"
+        z_corr_str = f"Z (Correlacao): {corr_dist:.2f} m" if corr_dist is not None else "Z (Correlacao): --"
+        z_fin_str = f"D Final: {final_dist:.2f} m" if (final_dist is not None and final_dist > 0) else "D Final: --"
+
+        cv2.putText(panel, "1D SUBPIXEL + ANTI-SOMBRA", (x_txt, py0 + 22), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 255), 2)
+        cv2.putText(panel, conv_str, (x_txt, py0 + 50), cv2.FONT_HERSHEY_SIMPLEX, f_scale * 0.9, (200, 200, 255), 1)
+        cv2.putText(panel, disp_str, (x_txt, py0 + 80), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (255, 255, 255), 1)
+        cv2.putText(panel, z_scan_str, (x_txt, py0 + 110), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 0), 2)
+        cv2.putText(panel, z_corr_str, (x_txt, py0 + 140), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (180, 255, 180), 1)
+        cv2.putText(panel, z_fin_str, (x_txt, py0 + 172), cv2.FONT_HERSHEY_SIMPLEX, f_scale * 1.05, (255, 200, 50), 2)
+
+    cv2.putText(
+        panel,
+        "Crista 1D Subpixel na ROI (Black-Hat Anti-Sombra)",
         (15, h - 15),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.65,
+        0.60,
         (0, 255, 255),
         2
     )
@@ -1085,7 +1041,7 @@ def gerar_painel_sgbm_roi(
 
 
 # ===========================================================================
-# PIPELINE INTEGRADO (GARANTIA DE PROFUNDIDADE 3D EM QUALQUER ÂNGULO)
+# PIPELINE INTEGRADO 1D SUBPIXEL
 # ===========================================================================
 
 def detectar_e_reconstruir(
@@ -1102,27 +1058,15 @@ def detectar_e_reconstruir(
     left_candidates, roi_left, edges_left = detectar_candidatas(
         rect_l, cx, cy, roi_radius, prev_bearing=_prev_bearing_l
     )
+    meta_l = getattr(detectar_candidatas, "last_roi_meta", None)
 
     right_candidates, roi_right, edges_right = detectar_candidatas(
         rect_r, cx, cy, roi_radius, prev_bearing=_prev_bearing_r
     )
-
-    force_swap = geometry["swap_lr"]
-    if left_candidates and right_candidates:
-        force_swap = _detectar_swap_na_mesma_linha_y(
-            left_candidates[0], right_candidates[0], geometry["swap_lr"]
-        )
-
-    sgbm_data = (
-        computar_mapa_sgbm_roi(rect_l, rect_r, cx, cy, roi_radius, geometry, force_swap=force_swap)
-        if USE_ROI_SGBM else None
-    )
+    meta_r = getattr(detectar_candidatas, "last_roi_meta", None)
 
     best_result = None
     fallback_result = None
-    best_sgbm_dist = None
-    best_median_disp = None
-    best_sampled_mask = None
     pares_testados = 0
     pares_validos = 0
 
@@ -1130,37 +1074,23 @@ def detectar_e_reconstruir(
         for left in left_candidates[:3]:
             for right in right_candidates[:3]:
                 diff_ang = _diff_angular_180(left["bearing"], right["bearing"])
-                if diff_ang > 20.0:
+                if diff_ang > 18.0:
                     continue
 
                 pares_testados += 1
-                mean_angle = _media_angular_180(left["bearing"], right["bearing"])
+                mean_angle = _media_angular_180(
+                    left["bearing"], right["bearing"], left["weight"], right["weight"]
+                )
+
+                scan_dist, scan_disp, scan_std, scan_samples = estimar_profundidade_scanline_1d(
+                    left, right, meta_l, meta_r, geometry
+                )
+
+                corr_dist, corr_disp = estimar_profundidade_correlacao_subpixel(
+                    left, meta_l, meta_r, geometry
+                )
 
                 plane_res, _ = reconstruir_par(left, right, geometry)
-                scan_res = reconstruir_por_scanline(
-                    left, right, geometry, roi_bin_l=roi_left, roi_bin_r=roi_right
-                )
-                sgbm_dist, median_disp, sampled_mask = extrair_profundidade_linha_sgbm(
-                    sgbm_data, left, geometry
-                )
-
-                # Se a direção inicial do SGBM não achou pixels na linha, testa o sentido inverso
-                if sgbm_dist is None and USE_ROI_SGBM:
-                    sgbm_alt = computar_mapa_sgbm_roi(
-                        rect_l, rect_r, cx, cy, roi_radius, geometry, force_swap=(not force_swap)
-                    )
-                    alt_dist, alt_disp, alt_mask = extrair_profundidade_linha_sgbm(
-                        sgbm_alt, left, geometry
-                    )
-                    if alt_dist is not None:
-                        sgbm_data = sgbm_alt
-                        sgbm_dist, median_disp, sampled_mask = alt_dist, alt_disp, alt_mask
-
-                # 4º Estimador de segurança: correlação de template 2D na linha epipolar
-                corr_dist = calcular_profundidade_correlacao_epipolar(
-                    sgbm_data, left, geometry, roi_bin_l=roi_left, roi_bin_r=roi_right
-                )
-
                 plane_sine = plane_res["plane_sine"] if plane_res is not None else 0.0
                 if plane_sine == 0.0:
                     p1 = plano_retroprojecao(left["line"], geometry["K1"], geometry["C1"])
@@ -1169,6 +1099,7 @@ def detectar_e_reconstruir(
                         plane_sine = float(np.linalg.norm(np.cross(p1[0], p2[0])))
 
                 score = left["weight"] + right["weight"]
+                disp_ref = scan_disp if scan_disp is not None else corr_disp
 
                 if fallback_result is None or score > fallback_result["score"]:
                     fallback_result = {
@@ -1179,34 +1110,31 @@ def detectar_e_reconstruir(
                         "distance": _last_valid_distance if _last_valid_distance > 0 else -1.0,
                         "plane_sine": plane_sine,
                         "score": score,
-                        "sgbm_dist": sgbm_dist,
-                        "median_disp": median_disp,
-                        "sampled_mask": sampled_mask
+                        "scan_dist": scan_dist,
+                        "corr_dist": corr_dist,
+                        "best_disp": disp_ref,
+                        "std_disp": scan_std,
+                        "scan_samples": scan_samples,
                     }
 
-                # Fusão hierárquica dos 4 estimadores
-                if sgbm_dist is not None:
-                    near_estimates = [sgbm_dist]
-                    if corr_dist is not None and abs(corr_dist - sgbm_dist) <= 0.35:
-                        near_estimates.append(corr_dist)
-                    if scan_res is not None and abs(scan_res[0] - sgbm_dist) <= 0.35:
-                        near_estimates.append(scan_res[0])
-                    if plane_res is not None and plane_sine > 0.06 and abs(plane_res["distance"] - sgbm_dist) <= 0.35:
-                        near_estimates.append(plane_res["distance"])
-                    raw_distance = float(np.mean(near_estimates))
+                estimates = []
+                if scan_dist is not None:
+                    estimates.append(scan_dist)
+                    if corr_dist is not None and abs(corr_dist - scan_dist) <= 0.30:
+                        estimates.append(corr_dist)
+                    if plane_res is not None and plane_sine > 0.08 and abs(plane_res["distance"] - scan_dist) <= 0.25:
+                        estimates.append(plane_res["distance"])
                 else:
-                    backup_estimates = []
                     if corr_dist is not None:
-                        backup_estimates.append(corr_dist)
-                    if scan_res is not None:
-                        backup_estimates.append(scan_res[0])
+                        estimates.append(corr_dist)
                     if plane_res is not None:
-                        backup_estimates.append(plane_res["distance"])
-                    if not backup_estimates:
-                        continue
-                    raw_distance = float(np.median(backup_estimates))
+                        estimates.append(plane_res["distance"])
+
+                if not estimates:
+                    continue
 
                 pares_validos += 1
+                raw_distance = float(np.mean(estimates))
 
                 candidate_result = {
                     "left": left,
@@ -1216,9 +1144,11 @@ def detectar_e_reconstruir(
                     "distance": raw_distance,
                     "plane_sine": plane_sine,
                     "score": score,
-                    "sgbm_dist": sgbm_dist if sgbm_dist is not None else corr_dist,
-                    "median_disp": median_disp,
-                    "sampled_mask": sampled_mask
+                    "scan_dist": scan_dist,
+                    "corr_dist": corr_dist,
+                    "best_disp": disp_ref,
+                    "std_disp": scan_std,
+                    "scan_samples": scan_samples,
                 }
 
                 if best_result is None or candidate_result["score"] > best_result["score"]:
@@ -1241,7 +1171,7 @@ def detectar_e_reconstruir(
 
         if final_output["distance"] > 0:
             _hist_dist.append(final_output["distance"])
-            filt_d = float(np.percentile(_hist_dist, 40))
+            filt_d = float(np.median(_hist_dist))
             final_output["distance"] = filt_d
             _last_valid_distance = filt_d
         elif _last_valid_distance > 0:
@@ -1250,33 +1180,26 @@ def detectar_e_reconstruir(
     chosen_left = final_output["left"] if final_output is not None else (
         left_candidates[0] if left_candidates else None
     )
-    if final_output is not None:
-        best_sgbm_dist = final_output.get("sgbm_dist")
-        best_median_disp = final_output.get("median_disp")
-        best_sampled_mask = final_output.get("sampled_mask")
-        final_dist_val = final_output.get("distance")
-    else:
-        best_sgbm_dist, best_median_disp, best_sampled_mask = extrair_profundidade_linha_sgbm(
-            sgbm_data, chosen_left, geometry
-        )
-        final_dist_val = best_sgbm_dist
 
-    sgbm_panel = gerar_painel_sgbm_roi(
+    panel = gerar_painel_subpixel_roi(
         rect_l,
-        sgbm_data,
+        meta_l,
         cx,
         cy,
         roi_radius,
         left_cand=chosen_left,
-        sgbm_dist=best_sgbm_dist,
-        median_disp=best_median_disp,
-        final_dist=final_dist_val,
-        sampled_mask=best_sampled_mask
+        scan_dist=final_output.get("scan_dist") if final_output else None,
+        corr_dist=final_output.get("corr_dist") if final_output else None,
+        best_disp=final_output.get("best_disp") if final_output else None,
+        std_disp=final_output.get("std_disp") if final_output else None,
+        final_dist=final_output.get("distance") if final_output else None,
+        scan_samples=final_output.get("scan_samples") if final_output else None,
+        delta_u=geometry.get("delta_u", 0.0),
     )
 
     if final_output is not None:
-        final_output["sgbm_panel"] = sgbm_panel
-    detectar_e_reconstruir.last_sgbm_panel = sgbm_panel
+        final_output["sgbm_panel"] = panel
+    detectar_e_reconstruir.last_sgbm_panel = panel
 
     detectar_e_reconstruir.debug = {
         "candidatas_esquerda": len(left_candidates),
