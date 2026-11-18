@@ -11,7 +11,7 @@ TECLAS_STM = set("wsxadcekypzt0F")
 # Controle de transmissão de ângulo pela visão.
 visao_atualiza_angulo = True
 
-
+ROI_RADIUS_BASE = 300
 # Inicializa a thread de telemetria.
 if arduino is not None:
     threading.Thread(
@@ -196,7 +196,7 @@ def main():
             cx = out_size[0] // 2
             cy = out_size[1] // 2
 
-            roi_radius = int(160 * escala)
+            roi_radius = int(ROI_RADIUS_BASE * escala)
 
             angulo, linha, dist_alvo, roi_bin = detectar_linha_mono(
                 rect_l,
@@ -343,7 +343,7 @@ def main():
             cx = out_size[0] // 2
             cy = out_size[1] // 2
 
-            roi_radius = int(160 * SCALES[scale_key])
+            roi_radius = int(ROI_RADIUS_BASE * SCALES[scale_key])
 
             (
                 reconstruction,

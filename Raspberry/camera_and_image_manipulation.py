@@ -1,8 +1,12 @@
-from collections import deque
 import cv2
 import numpy as np
 
 from serial_communication import telemetria_dados  # noqa: F401
+from filtros_estatisticos import (
+    filtrar_disparidades_espaciais,
+    RobustDisparityKalmanFilter,
+    CircularAngleFilter,
+)
 
 
 # ===========================================================================
@@ -49,11 +53,17 @@ DIGITAL_CONVERGENCE_DIST_M = 2.2
 DISTANCE_SAMPLES = 30
 SCANLINE_HALF_WIN_PX = 10
 
-# Filtro temporal
-TEMPORAL_WINDOW = 7
-_hist_dist = deque(maxlen=TEMPORAL_WINDOW)
-_hist_sin2 = deque(maxlen=TEMPORAL_WINDOW)
-_hist_cos2 = deque(maxlen=TEMPORAL_WINDOW)
+# Instâncias globais dos filtros estatísticos (Hampel + Kalman 1D na disparidade e Circular no ângulo)
+_disp_kalman_filter = RobustDisparityKalmanFilter(
+    window_size=9,
+    hampel_k=2.0,
+    q_process=0.06,
+    r_base=0.50,
+    gate_k=3.0,
+    max_missed_frames=10
+)
+_angle_filter = CircularAngleFilter(window_size=7, alpha_ema=0.45)
+
 _prev_bearing_l = None
 _prev_bearing_r = None
 _last_valid_distance = -1.0
@@ -273,7 +283,6 @@ def _validar_vale_bilateral(cand, gray_crop, dist_crop, x0_off, y0_off, max_rope
     Verifica se a reta candidata é realmente um VALE (escuro no meio e mais claro
     nos DOIS lados perpendiculares) e não a borda de uma sombra (claro de um lado
     e escuro do outro).
-    Retorna (valido_bool, fator_contraste).
     """
     x1, y1, x2, y2 = cand["segment_subpx"]
     dx = x2 - x1
@@ -282,14 +291,12 @@ def _validar_vale_bilateral(cand, gray_crop, dist_crop, x0_off, y0_off, max_rope
     if length < 6.0:
         return False, 0.0
 
-    # Vetor normal unitário perpendicular à reta
     nx = -dy / length
     ny = dx / length
 
     ch, cw = gray_crop.shape[:2]
     alphas = np.linspace(0.12, 0.88, 12)
 
-    # Mede o raio médio da crista ao longo da reta
     radii = []
     for a in alphas:
         px = int(round((x1 + a * dx) - x0_off))
@@ -303,7 +310,6 @@ def _validar_vale_bilateral(cand, gray_crop, dist_crop, x0_off, y0_off, max_rope
     if est_r > max_rope_r:
         return False, 0.0
 
-    # Distância perpendicular para amostrar o fundo de cada lado da corda
     step_n = float(np.clip(est_r + 4.5, 4.0, max_rope_r + 6.0))
 
     diffs_left = []
@@ -333,13 +339,10 @@ def _validar_vale_bilateral(cand, gray_crop, dist_crop, x0_off, y0_off, max_rope
     med_left = float(np.median(diffs_left))
     med_right = float(np.median(diffs_right))
 
-    # Borda de sombra tem med_left alto mas med_right <= 0 (ou vice-versa).
-    # Corda real tem AMBOS med_left e med_right positivos!
     min_side_diff = min(med_left, med_right)
     if min_side_diff < VALLEY_MIN_BILATERAL_DIFF:
         return False, 0.0
 
-    # Fator de qualidade pelo contraste bilateral
     contrast_boost = float(np.clip(1.0 + 0.02 * min_side_diff, 1.0, 1.6))
     return True, contrast_boost
 
@@ -366,7 +369,6 @@ def _refinar_eixo_ponderado_por_crista(clusters, dist_crop, gray_crop, x0_off, y
         ys_l, xs_l = np.nonzero(valid_ridge_px)
 
         if len(xs_l) >= 15:
-            # Limita o valor máximo de d no peso para que manchas largas nunca ganhem vantagem
             d_clamped = np.clip(dist_crop[ys_l, xs_l].astype(np.float64), 1.0, max_rope_r)
             weights = d_clamped ** 2
             w_sum = float(np.sum(weights))
@@ -406,7 +408,6 @@ def _refinar_eixo_ponderado_por_crista(clusters, dist_crop, gray_crop, x0_off, y
         if cand is None or cand["length"] < min_len:
             continue
 
-        # Validação anti-sombra: exige que seja um vale escuro cercado por fundo mais claro nos 2 lados
         is_valley, contrast_boost = _validar_vale_bilateral(
             cand, gray_crop, dist_crop, x0_off, y0_off, max_rope_r
         )
@@ -438,8 +439,6 @@ def detectar_candidatas(rect, cx, cy, roi_radius, max_gap=45, prev_bearing=None)
 
     dist_crop = cv2.distanceTransform(bin_crop, cv2.DIST_L2, 3)
 
-    # Teto máximo de espessura da corda ajustado pela escala:
-    # qualquer mancha cuja distância até a borda supere max_rope_r é sombra/objeto largo e é zerada!
     max_rope_r = max(4.5, MAX_ROPE_RADIUS_BASE * max(scale_est, 0.45))
     bin_crop[dist_crop > max_rope_r] = 0
     dist_crop[dist_crop > max_rope_r] = 0.0
@@ -566,7 +565,7 @@ def detectar_linha_mono(rect_l, cx, cy, roi_radius):
 
 
 # ===========================================================================
-# ESTIMAÇÃO DE PROFUNDIDADE 1D SUBPIXEL (COMPENSADA COM CONVERGÊNCIA DIGITAL)
+# ESTIMAÇÃO DE PROFUNDIDADE 1D SUBPIXEL COM FILTRAGEM ESPACIAL MAD
 # ===========================================================================
 
 def _centroide_subpixel_crista_1d(meta, y_global, x_est_global, half_win=SCANLINE_HALF_WIN_PX):
@@ -599,10 +598,33 @@ def _centroide_subpixel_crista_1d(meta, y_global, x_est_global, half_win=SCANLIN
     return float(x0 + u_subpx_local)
 
 
-def estimar_profundidade_scanline_1d(left_cand, right_cand, meta_l, meta_r, geometry):
+def _disparidade_para_distancia_3d(disp_px, left_cand, geometry):
     f_rect = geometry["f_rect"]
     baseline = geometry["baseline"]
     K1 = geometry["K1"]
+
+    if disp_px is None or disp_px <= 0.5 or baseline <= 1e-5 or f_rect <= 1.0:
+        return None
+
+    z_depth = (f_rect * baseline) / float(disp_px)
+    mx, my = left_cand["midpoint"]
+    X = (mx - K1[0, 2]) * z_depth / f_rect
+    Y = (my - K1[1, 2]) * z_depth / f_rect
+    dist_3d = float(np.sqrt(X * X + Y * Y + z_depth * z_depth))
+
+    if not (MIN_DISTANCE <= dist_3d <= MAX_DISTANCE):
+        return None
+    return dist_3d
+
+
+def estimar_profundidade_scanline_1d(left_cand, right_cand, meta_l, meta_r, geometry):
+    """
+    Amostra scanlines horizontais, rejeita falhas de crista (sem fazer fallback
+    para a reta inclinada bruta) e aplica o filtro espacial MAD + Consistência Linear
+    + Média Aparada de `filtros_estatisticos.py`.
+    """
+    f_rect = geometry["f_rect"]
+    baseline = geometry["baseline"]
     cx_offset = geometry.get("cx_offset", 0.0)
 
     if baseline <= 1e-5 or f_rect <= 1.0 or meta_l is None or meta_r is None:
@@ -621,7 +643,7 @@ def estimar_profundidade_scanline_1d(left_cand, right_cand, meta_l, meta_r, geom
     d_max_fg = (f_rect * baseline) / MIN_DISTANCE
 
     ys = np.linspace(y_min, y_max, DISTANCE_SAMPLES)
-    scan_samples = []
+    raw_samples = []
 
     use_1d_centroid = abs(left_cand["bearing"]) <= 72.0
 
@@ -632,41 +654,24 @@ def estimar_profundidade_scanline_1d(left_cand, right_cand, meta_l, meta_r, geom
         if use_1d_centroid:
             ul_sub = _centroide_subpixel_crista_1d(meta_l, y_val, ul_line)
             ur_sub = _centroide_subpixel_crista_1d(meta_r, y_val, ur_line)
-            if ul_sub is None:
-                ul_sub = ul_line
-            if ur_sub is None:
-                ur_sub = ur_line
+            # Descarta scanlines onde a crista falhou em vez de usar ul_line/ur_line
+            if ul_sub is None or ur_sub is None:
+                continue
         else:
             ul_sub = ul_line
             ur_sub = ur_line
 
         disp_val = abs((ul_sub - ur_sub) - cx_offset)
         if d_min_fg <= disp_val <= d_max_fg:
-            scan_samples.append((float(y_val), float(ul_sub), float(ur_sub), float(disp_val)))
+            raw_samples.append((float(y_val), float(ul_sub), float(ur_sub), float(disp_val)))
 
-    if len(scan_samples) < 4:
-        return None, None, None, scan_samples
+    # Aplica o filtro estatístico espacial (MAD + Reta d(y) + Trimmed Mean 20-80%)
+    best_disp, std_disp, clean_samples = filtrar_disparidades_espaciais(raw_samples)
+    if best_disp is None:
+        return None, None, None, raw_samples
 
-    disps = np.array([s[3] for s in scan_samples], dtype=np.float64)
-
-    q35, q85 = np.percentile(disps, [35.0, 85.0])
-    inliers = disps[(disps >= q35 - 0.5) & (disps <= q85 + 0.5)]
-    if len(inliers) == 0:
-        inliers = disps
-
-    best_disp = float(np.mean(inliers))
-    std_disp = float(np.std(inliers))
-    z_depth = (f_rect * baseline) / best_disp
-
-    mx, my = left_cand["midpoint"]
-    X = (mx - K1[0, 2]) * z_depth / f_rect
-    Y = (my - K1[1, 2]) * z_depth / f_rect
-    dist_3d = float(np.sqrt(X * X + Y * Y + z_depth * z_depth))
-
-    if not (MIN_DISTANCE <= dist_3d <= MAX_DISTANCE):
-        return None, best_disp, std_disp, scan_samples
-
-    return dist_3d, best_disp, std_disp, scan_samples
+    dist_3d = _disparidade_para_distancia_3d(best_disp, left_cand, geometry)
+    return dist_3d, best_disp, std_disp, clean_samples
 
 
 def estimar_profundidade_correlacao_subpixel(left_cand, meta_l, meta_r, geometry):
@@ -675,7 +680,6 @@ def estimar_profundidade_correlacao_subpixel(left_cand, meta_l, meta_r, geometry
 
     f_rect = geometry["f_rect"]
     baseline = geometry["baseline"]
-    K1 = geometry["K1"]
     cx_offset = geometry.get("cx_offset", 0.0)
 
     if baseline <= 1e-5 or f_rect <= 1.0:
@@ -744,16 +748,7 @@ def estimar_profundidade_correlacao_subpixel(left_cand, meta_l, meta_r, geometry
         return None, None
 
     med_disp = float(np.median(subpx_disps))
-    z_depth = (f_rect * baseline) / med_disp
-
-    mx, my = left_cand["midpoint"]
-    X = (mx - K1[0, 2]) * z_depth / f_rect
-    Y = (my - K1[1, 2]) * z_depth / f_rect
-    dist_3d = float(np.sqrt(X * X + Y * Y + z_depth * z_depth))
-
-    if not (MIN_DISTANCE <= dist_3d <= MAX_DISTANCE):
-        return None, med_disp
-
+    dist_3d = _disparidade_para_distancia_3d(med_disp, left_cand, geometry)
     return dist_3d, med_disp
 
 
@@ -924,7 +919,7 @@ def reconstruir_par(left, right, geometry):
 
 
 # ===========================================================================
-# PAINEL DA 3ª LINHA DO GRID: MAPA DA CRISTA + GRÁFICO SUBPIXEL 1D
+# PAINEL DA 3ª LINHA DO GRID: MAPA DA CRISTA + GRÁFICO SUBPIXEL 1D + KALMAN
 # ===========================================================================
 
 def gerar_painel_subpixel_roi(
@@ -937,6 +932,7 @@ def gerar_painel_subpixel_roi(
     scan_dist=None,
     corr_dist=None,
     best_disp=None,
+    filtered_disp=None,
     std_disp=None,
     final_dist=None,
     scan_samples=None,
@@ -983,9 +979,10 @@ def gerar_painel_subpixel_roi(
     cv2.rectangle(panel, (px0, py0), (px0 + plot_w, py0 + plot_h), (32, 32, 32), -1)
     cv2.rectangle(panel, (px0, py0), (px0 + plot_w, py0 + plot_h), (90, 90, 90), 1)
 
-    if scan_samples and best_disp is not None:
-        d_min_plot = max(0.0, best_disp - 12.0)
-        d_max_plot = best_disp + 12.0
+    ref_center = filtered_disp if filtered_disp is not None else best_disp
+    if scan_samples and ref_center is not None:
+        d_min_plot = max(0.0, ref_center - 12.0)
+        d_max_plot = ref_center + 12.0
         x_ref = int(px0 + 0.5 * plot_w)
         cv2.line(panel, (x_ref, py0), (x_ref, py0 + plot_h), (0, 255, 0), 1)
 
@@ -1002,7 +999,7 @@ def gerar_painel_subpixel_roi(
 
     cv2.putText(
         panel,
-        "Perfil Disp(y)",
+        "Inliers MAD(y)",
         (px0 + 8, py0 + 18),
         cv2.FONT_HERSHEY_SIMPLEX,
         0.45,
@@ -1012,27 +1009,27 @@ def gerar_painel_subpixel_roi(
 
     x_txt = px0 + plot_w + 20
     if x_txt < panel_w - 60:
-        f_scale = max(0.45, h / 640.0)
+        f_scale = max(0.44, h / 650.0)
         std_txt = f" (std {std_disp:.2f}px)" if std_disp is not None else ""
-        disp_str = f"Disp. Real: {best_disp:.2f} px{std_txt}" if best_disp is not None else "Disp. Real: --"
+        disp_raw_str = f"Disp. MAD: {best_disp:.2f} px{std_txt}" if best_disp is not None else "Disp. MAD: --"
+        disp_kal_str = f"Disp. Hampel+Kalman: {filtered_disp:.2f} px" if filtered_disp is not None else "Disp. Kalman: --"
         conv_str = f"Toe-In Digital: {DIGITAL_CONVERGENCE_DIST_M:.2f}m ({delta_u:+.1f}px/cam)"
-        z_scan_str = f"Z (1D Crista): {scan_dist:.2f} m" if scan_dist is not None else "Z (1D Crista): --"
-        z_corr_str = f"Z (Correlacao): {corr_dist:.2f} m" if corr_dist is not None else "Z (Correlacao): --"
-        z_fin_str = f"D Final: {final_dist:.2f} m" if (final_dist is not None and final_dist > 0) else "D Final: --"
+        z_scan_str = f"Z Bruto (1D): {scan_dist:.2f} m" if scan_dist is not None else "Z Bruto (1D): --"
+        z_fin_str = f"D Filtrada (Kalman): {final_dist:.2f} m" if (final_dist is not None and final_dist > 0) else "D Filtrada: --"
 
-        cv2.putText(panel, "1D SUBPIXEL + ANTI-SOMBRA", (x_txt, py0 + 22), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 255), 2)
-        cv2.putText(panel, conv_str, (x_txt, py0 + 50), cv2.FONT_HERSHEY_SIMPLEX, f_scale * 0.9, (200, 200, 255), 1)
-        cv2.putText(panel, disp_str, (x_txt, py0 + 80), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (255, 255, 255), 1)
-        cv2.putText(panel, z_scan_str, (x_txt, py0 + 110), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 0), 2)
-        cv2.putText(panel, z_corr_str, (x_txt, py0 + 140), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (180, 255, 180), 1)
-        cv2.putText(panel, z_fin_str, (x_txt, py0 + 172), cv2.FONT_HERSHEY_SIMPLEX, f_scale * 1.05, (255, 200, 50), 2)
+        cv2.putText(panel, "HAMPEL + KALMAN 1D (EM DISPARIDADE)", (x_txt, py0 + 22), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 255), 2)
+        cv2.putText(panel, conv_str, (x_txt, py0 + 48), cv2.FONT_HERSHEY_SIMPLEX, f_scale * 0.9, (200, 200, 255), 1)
+        cv2.putText(panel, disp_raw_str, (x_txt, py0 + 76), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (255, 255, 255), 1)
+        cv2.putText(panel, disp_kal_str, (x_txt, py0 + 104), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (0, 255, 200), 2)
+        cv2.putText(panel, z_scan_str, (x_txt, py0 + 132), cv2.FONT_HERSHEY_SIMPLEX, f_scale, (180, 255, 180), 1)
+        cv2.putText(panel, z_fin_str, (x_txt, py0 + 164), cv2.FONT_HERSHEY_SIMPLEX, f_scale * 1.05, (0, 255, 0), 2)
 
     cv2.putText(
         panel,
-        "Crista 1D Subpixel na ROI (Black-Hat Anti-Sombra)",
+        "Crista 1D Subpixel + Filtro Estatistico Hampel/Kalman",
         (15, h - 15),
         cv2.FONT_HERSHEY_SIMPLEX,
-        0.60,
+        0.58,
         (0, 255, 255),
         2
     )
@@ -1041,7 +1038,7 @@ def gerar_painel_subpixel_roi(
 
 
 # ===========================================================================
-# PIPELINE INTEGRADO 1D SUBPIXEL
+# PIPELINE INTEGRADO (CRISTA 1D + HAMPEL + KALMAN NO ESPAÇO DE DISPARIDADE)
 # ===========================================================================
 
 def detectar_e_reconstruir(
@@ -1082,14 +1079,17 @@ def detectar_e_reconstruir(
                     left["bearing"], right["bearing"], left["weight"], right["weight"]
                 )
 
+                # 1. Estimador Principal: Centroide 1D Subpixel com filtro espacial MAD
                 scan_dist, scan_disp, scan_std, scan_samples = estimar_profundidade_scanline_1d(
                     left, right, meta_l, meta_r, geometry
                 )
 
+                # 2. Estimador Secundário (para retas próximas a 90° horizontal): Correlação Subpixel
                 corr_dist, corr_disp = estimar_profundidade_correlacao_subpixel(
                     left, meta_l, meta_r, geometry
                 )
 
+                # 3. Interseção de Planos (para cálculo de plane_sine e reserva geométrica)
                 plane_res, _ = reconstruir_par(left, right, geometry)
                 plane_sine = plane_res["plane_sine"] if plane_res is not None else 0.0
                 if plane_sine == 0.0:
@@ -1099,7 +1099,25 @@ def detectar_e_reconstruir(
                         plane_sine = float(np.linalg.norm(np.cross(p1[0], p2[0])))
 
                 score = left["weight"] + right["weight"]
-                disp_ref = scan_disp if scan_disp is not None else corr_disp
+
+                # Seleciona a disparidade bruta do frame sem contaminar scan_disp com estimadores mais ruidosos
+                if scan_disp is not None:
+                    frame_disp_raw = scan_disp
+                    frame_std = scan_std if scan_std is not None else 0.4
+                    raw_distance = scan_dist
+                elif corr_disp is not None:
+                    frame_disp_raw = corr_disp
+                    frame_std = 0.9
+                    raw_distance = corr_dist
+                elif plane_res is not None and plane_sine > 0.08:
+                    # Converte a distância dos planos em disparidade equivalente para alimentar o Kalman
+                    frame_disp_raw = (geometry["f_rect"] * geometry["baseline"]) / plane_res["distance"]
+                    frame_std = 1.5
+                    raw_distance = plane_res["distance"]
+                else:
+                    frame_disp_raw = None
+                    frame_std = None
+                    raw_distance = None
 
                 if fallback_result is None or score > fallback_result["score"]:
                     fallback_result = {
@@ -1112,29 +1130,16 @@ def detectar_e_reconstruir(
                         "score": score,
                         "scan_dist": scan_dist,
                         "corr_dist": corr_dist,
-                        "best_disp": disp_ref,
-                        "std_disp": scan_std,
+                        "best_disp": frame_disp_raw,
+                        "filtered_disp": _disp_kalman_filter.d_est,
+                        "std_disp": frame_std,
                         "scan_samples": scan_samples,
                     }
 
-                estimates = []
-                if scan_dist is not None:
-                    estimates.append(scan_dist)
-                    if corr_dist is not None and abs(corr_dist - scan_dist) <= 0.30:
-                        estimates.append(corr_dist)
-                    if plane_res is not None and plane_sine > 0.08 and abs(plane_res["distance"] - scan_dist) <= 0.25:
-                        estimates.append(plane_res["distance"])
-                else:
-                    if corr_dist is not None:
-                        estimates.append(corr_dist)
-                    if plane_res is not None:
-                        estimates.append(plane_res["distance"])
-
-                if not estimates:
+                if frame_disp_raw is None or raw_distance is None:
                     continue
 
                 pares_validos += 1
-                raw_distance = float(np.mean(estimates))
 
                 candidate_result = {
                     "left": left,
@@ -1146,8 +1151,9 @@ def detectar_e_reconstruir(
                     "score": score,
                     "scan_dist": scan_dist,
                     "corr_dist": corr_dist,
-                    "best_disp": disp_ref,
-                    "std_disp": scan_std,
+                    "best_disp": frame_disp_raw,
+                    "filtered_disp": frame_disp_raw,
+                    "std_disp": frame_std,
                     "scan_samples": scan_samples,
                 }
 
@@ -1160,22 +1166,32 @@ def detectar_e_reconstruir(
         _prev_bearing_l = final_output["left"]["bearing"]
         _prev_bearing_r = final_output["right"]["bearing"]
 
-        ang_rad2 = np.radians(final_output["bearing"] * 2.0)
-        _hist_sin2.append(np.sin(ang_rad2))
-        _hist_cos2.append(np.cos(ang_rad2))
-        smooth_bearing = float(
-            np.degrees(np.arctan2(np.median(_hist_sin2), np.median(_hist_cos2))) / 2.0
-        )
-        final_output["bearing"] = smooth_bearing
-        final_output["angle"] = smooth_bearing
+        # 1. Filtragem Circular de Ângulo (Bearing)
+        smooth_bearing = _angle_filter.update(final_output["bearing"])
+        if smooth_bearing is not None:
+            final_output["bearing"] = smooth_bearing
+            final_output["angle"] = smooth_bearing
 
-        if final_output["distance"] > 0:
-            _hist_dist.append(final_output["distance"])
-            filt_d = float(np.median(_hist_dist))
-            final_output["distance"] = filt_d
-            _last_valid_distance = filt_d
+        # 2. Filtragem Temporal Hampel + Kalman 1D no espaço de Disparidade
+        d_raw_frame = final_output.get("best_disp")
+        std_frame = final_output.get("std_disp", 0.5)
+        d_kalman = _disp_kalman_filter.update(d_raw_frame, std_spatial=std_frame)
+        final_output["filtered_disp"] = d_kalman
+
+        if d_kalman is not None and d_kalman > 0.5:
+            filt_dist = _disparidade_para_distancia_3d(
+                d_kalman, final_output["left"], geometry
+            )
+            if filt_dist is not None:
+                final_output["distance"] = filt_dist
+                _last_valid_distance = filt_dist
+            elif _last_valid_distance > 0:
+                final_output["distance"] = _last_valid_distance
         elif _last_valid_distance > 0:
             final_output["distance"] = _last_valid_distance
+    else:
+        # Atualiza contador de perda de detecção no filtro
+        _disp_kalman_filter.update(None)
 
     chosen_left = final_output["left"] if final_output is not None else (
         left_candidates[0] if left_candidates else None
@@ -1191,6 +1207,7 @@ def detectar_e_reconstruir(
         scan_dist=final_output.get("scan_dist") if final_output else None,
         corr_dist=final_output.get("corr_dist") if final_output else None,
         best_disp=final_output.get("best_disp") if final_output else None,
+        filtered_disp=final_output.get("filtered_disp") if final_output else None,
         std_disp=final_output.get("std_disp") if final_output else None,
         final_dist=final_output.get("distance") if final_output else None,
         scan_samples=final_output.get("scan_samples") if final_output else None,
@@ -1300,6 +1317,10 @@ class ScaleManager:
         }
 
     def set(self, scale):
+        if scale != self.current:
+            # Ao mudar de escala de imagem (ex: tecla 1, 2, 3, 4), a disparidade em pixels
+            # muda proporcionalmente: reseta o filtro para convergir instantaneamente na nova escala.
+            _disp_kalman_filter.reset()
         self.current = scale
 
     def get(self):
